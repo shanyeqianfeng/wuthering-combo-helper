@@ -6,3 +6,7 @@ teams.json.bak
 settings.json
 *.exe
 *.lnk
+
+build/
+release/
+dist/
