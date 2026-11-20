@@ -1581,7 +1581,7 @@ class Editor:
 
     def open_keymap(self):
         sc = self.app.scale
-        w, h = int(460 * sc), int(300 * sc)
+        w, h = int(520 * sc), int(390 * sc)
         dlg = self._dialog("自定义键位", w, h)
         fs = max(9, int(9 * sc))
 
@@ -1621,9 +1621,10 @@ class Editor:
             return None
 
         # 校验提示行
-        hint = tk.Label(dlg, text="", bg=C_BG, fg=C_RED,
-                        font=("Microsoft YaHei", max(7, int(8 * sc))), anchor="w")
-        hint.pack(fill="x", padx=int(10 * sc))
+        hint = tk.Label(dlg, text="", bg=C_BG, fg=C_RED, justify="left",
+                        font=("Microsoft YaHei", max(8, int(9 * sc))), anchor="w",
+                        wraplength=int(480 * sc))
+        hint.pack(fill="x", padx=int(10 * sc), pady=(int(4 * sc), int(2 * sc)))
 
         FIXED_KEYS = ("1", "2", "3")   # 切人键，不允许被占用
         HOLD_LEFT = "LMB"              # 普攻/重击用的左键（允许，但会提示）
