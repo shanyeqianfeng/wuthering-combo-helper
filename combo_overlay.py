@@ -1040,7 +1040,7 @@ class Editor:
         self.win = tk.Toplevel(app.root)
         self.win.overrideredirect(True)          # 去掉系统白色标题栏
         self.win.configure(bg=C_BG)
-        ww, wh = int(720 * sc), int(800 * sc)   # 两条轴各三排 + 预览独立一行
+        ww, wh = int(720 * sc), int(775 * sc)   # 两条轴各三排 + 预览独立一行
         sx = max(0, (self.win.winfo_screenwidth() - ww) // 2)
         sy = max(0, (self.win.winfo_screenheight() - wh) // 2 - int(60 * sc))
         self.win.geometry(f"{ww}x{wh}+{sx}+{sy}")
@@ -1220,7 +1220,7 @@ class Editor:
                                         cursor="hand2")
         self.cancel_ins_btn.pack(side="left")
         for text, cmd in (("确认添加", self.add_move), ("撤销", self.undo_move),
-                          ("清空", self.clear_axis), ("关闭", self.close)):
+                          ("清空", self.clear_axis)):
             tk.Button(btnrow, text=text, command=cmd, bd=0,
                       bg=(C_ACCENT if text == "确认添加" else C_BAR),
                       fg="#fff" if text == "确认添加" else C_TEXT,
