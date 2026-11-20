@@ -212,6 +212,165 @@ POLL_VKS = (list(range(0x41, 0x5B)) + list(range(0x30, 0x3A))
             + [0x20, 0xA0, 0xA1, 0x01, 0x02, 0x04, 0x05, 0x06])
 MOUSE_VK = {0x01: "LMB", 0x02: "RMB", 0x04: "MMB", 0x05: "X1", 0x06: "X2"}
 
+# ---- Raw Input 采集：游戏里最可靠的一条路（被动接收，不注入、不挂钩子）----
+RIDEV_INPUTSINK = 0x00000100
+RID_INPUT = 0x10000003
+WM_INPUT = 0x00FF
+RI_KEY_BREAK = 0x01
+RI_MOUSE_BUTTON_FLAGS = (
+    (0x0001, "LMB", True), (0x0002, "LMB", False),
+    (0x0004, "RMB", True), (0x0008, "RMB", False),
+    (0x0010, "MMB", True), (0x0020, "MMB", False),
+    (0x0040, "X1", True), (0x0080, "X1", False),
+    (0x0100, "X2", True), (0x0200, "X2", False),
+)
+
+
+class RAWINPUTDEVICE(ctypes.Structure):
+    _fields_ = [("usUsagePage", wintypes.USHORT), ("usUsage", wintypes.USHORT),
+                ("dwFlags", wintypes.DWORD), ("hwndTarget", wintypes.HWND)]
+
+
+class RAWINPUTHEADER(ctypes.Structure):
+    _fields_ = [("dwType", wintypes.DWORD), ("dwSize", wintypes.DWORD),
+                ("hDevice", wintypes.HANDLE), ("wParam", wintypes.WPARAM)]
+
+
+class RAWKEYBOARD(ctypes.Structure):
+    _fields_ = [("MakeCode", wintypes.USHORT), ("Flags", wintypes.USHORT),
+                ("Reserved", wintypes.USHORT), ("VKey", wintypes.USHORT),
+                ("Message", wintypes.UINT)]
+
+
+class RAWMOUSE(ctypes.Structure):
+    _fields_ = [("usFlags", wintypes.USHORT), ("ulButtons", wintypes.ULONG),
+                ("ulRawButtons", wintypes.ULONG), ("lLastX", wintypes.LONG),
+                ("lLastY", wintypes.LONG), ("ulExtraInformation", wintypes.ULONG)]
+
+
+class RAWINPUT(ctypes.Structure):
+    class _U(ctypes.Union):
+        _fields_ = [("keyboard", RAWKEYBOARD), ("mouse", RAWMOUSE)]
+    _anonymous_ = ("data",)
+    _fields_ = [("header", RAWINPUTHEADER), ("data", _U)]
+
+
+def _raw_thread():
+    """独立线程：注册 Raw Input，收 WM_INPUT → 转成 events 队列。"""
+    k32, u32 = kernel32, user32
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT,
+                                 wintypes.WPARAM, wintypes.LPARAM)
+    hinst = k32.GetModuleHandleW(None)
+    klass = "ComboRawInput"
+    wc = ctypes.create_string_buffer(ctypes.sizeof(ctypes.c_void_p) * 8)  # 占位，下面用结构体
+    # 直接调用 RegisterClassW 需要结构体，简化：用 WNDCLASSW
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
+                    ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                    ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                    ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
+                    ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
+    u32.DefWindowProcW.restype = ctypes.c_long
+
+    downs = {}
+    mouse_downs = {}
+
+    def wndproc(hwnd, msg, wp, lp):
+        if msg == WM_INPUT:
+            size = wintypes.UINT(0)
+            u32.GetRawInputData(lp, RID_INPUT, None, ctypes.byref(size),
+                                ctypes.sizeof(RAWINPUTHEADER))
+            if size.value:
+                buf = ctypes.create_string_buffer(size.value)
+                u32.GetRawInputData(lp, RID_INPUT, buf, ctypes.byref(size),
+                                    ctypes.sizeof(RAWINPUTHEADER))
+                raw = ctypes.cast(buf, ctypes.POINTER(RAWINPUT)).contents
+                if raw.header.dwType == 1:      # keyboard
+                    vk = int(raw.keyboard.VKey)
+                    up = bool(raw.keyboard.Flags & RI_KEY_BREAK)
+                    if vk and not up:
+                        downs[vk] = time.time()
+                    elif vk:
+                        st = downs.pop(vk, None)
+                        dur = (time.time() - st) * 1000.0 if st else 0.0
+                        if not _capture["on"]:
+                            events.put(("key", vk, dur, None))
+                elif raw.header.dwType == 0:    # mouse
+                    flags = int(raw.mouse.ulButtons) & 0xFFFF
+                    for bit, name, is_down in RI_MOUSE_BUTTON_FLAGS:
+                        if flags & bit:
+                            pt = wintypes.POINT()
+                            u32.GetCursorPos(ctypes.byref(pt))
+                            if is_down:
+                                mouse_downs[name] = time.time()
+                            else:
+                                st = mouse_downs.pop(name, None)
+                                dur = (time.time() - st) * 1000.0 if st else 0.0
+                                if not _capture["on"]:
+                                    events.put(("mouse", name, dur, (int(pt.x), int(pt.y))))
+            return 0
+        return u32.DefWindowProcW(hwnd, msg, wp, lp)
+
+    proc = WNDPROC(wndproc)
+    wcw = WNDCLASSW()
+    wcw.lpfnWndProc = proc
+    wcw.hInstance = hinst
+    wcw.lpszClassName = klass
+
+    u32.RegisterClassW.restype = wintypes.ATOM
+    u32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
+    u32.CreateWindowExW.restype = wintypes.HWND
+    u32.CreateWindowExW.argtypes = [
+        wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
+    u32.DefWindowProcW.restype = ctypes.c_long
+    u32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                   wintypes.WPARAM, wintypes.LPARAM]
+    u32.RegisterRawInputDevices.restype = wintypes.BOOL
+    u32.RegisterRawInputDevices.argtypes = [ctypes.c_void_p, wintypes.UINT, wintypes.UINT]
+    u32.GetRawInputData.restype = wintypes.UINT
+
+    u32.RegisterClassW(ctypes.byref(wcw))
+
+    HWND_MESSAGE = wintypes.HWND(-3)
+    hwnd = u32.CreateWindowExW(0, klass, "raw", 0, 0, 0, 0, 0,
+                               HWND_MESSAGE, None, hinst, None)
+    if not hwnd:
+        _raw_ok["err"] = "CreateWindowExW err=%d" % k32.GetLastError()
+        _raw_ok["ok"] = False
+        return
+
+    devs = (RAWINPUTDEVICE * 2)()
+    devs[0].usUsagePage, devs[0].usUsage = 1, 6      # keyboard
+    devs[0].dwFlags, devs[0].hwndTarget = RIDEV_INPUTSINK, hwnd
+    devs[1].usUsagePage, devs[1].usUsage = 1, 2      # mouse
+    devs[1].dwFlags, devs[1].hwndTarget = RIDEV_INPUTSINK, hwnd
+    if not u32.RegisterRawInputDevices(ctypes.byref(devs), 2, ctypes.sizeof(RAWINPUTDEVICE)):
+        _raw_ok["ok"] = False
+        return
+    _raw_ok["ok"] = True
+
+    msg = MSG()
+    while u32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+        u32.TranslateMessage(ctypes.byref(msg))
+        u32.DispatchMessageW(ctypes.byref(msg))
+
+
+_raw_ok = {"ok": None}
+
+
+def start_raw_input():
+    threading.Thread(target=_raw_thread, daemon=True).start()
+    for _ in range(50):
+        if _raw_ok["ok"] is not None:
+            break
+        time.sleep(0.02)
+    return bool(_raw_ok["ok"])
+
+
+
+
 
 def force_topmost(hwnd):
     try:
@@ -926,6 +1085,8 @@ class App:
                     if _capture["on"]:
                         continue
                     self._log("POLL-UP vk=%d dur=%d" % (vk, int(dur)))
+                    if _raw_ok["ok"]:
+                        continue        # Raw Input 已在采集，轮询只负责键位捕获
                     if vk in MOUSE_VK:
                         events.put(("mouse", MOUSE_VK[vk], dur, self._cursor_pos()))
                     else:
@@ -2130,10 +2291,16 @@ def main():
     root = tk.Tk()
     app = App(root, cfg, scale)
     threading.Thread(target=pump, daemon=True).start()
-    if os.environ.get("COMBO_USE_HOOKS"):
-        install_hooks()          # 兜底：需要钩子时手动开启
+    mode = os.environ.get("COMBO_INPUT", "raw")
+    if mode == "hooks":
+        install_hooks()
+        app._log("INPUT mode=hooks")
+    elif start_raw_input():
+        app.start_poll()             # 轮询只用于「键位」对话框的按键捕获
+        app._log("INPUT mode=raw（Raw Input，判定走这条）")
     else:
-        app.start_poll()         # 默认轮询采集，避免被游戏/反作弊挡钩子
+        app.start_poll()
+        app._log("INPUT mode=poll（Raw Input 注册失败，退回轮询）")
     root.after(300, lambda: click_through(app.hwnd(), app.locked))
     if os.environ.get("COMBO_OPEN_EDITOR"):
         root.after(600, app.open_editor)
