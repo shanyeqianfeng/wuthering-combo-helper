@@ -209,6 +209,11 @@ ALIAS = {"普攻": "LMB", "重击": "LMB_HOLD",
 KEYMAP_DEFAULT = {"E": "E", "Q": "Q", "R": "R", "SPACE": "SPACE", "SHIFT": "SHIFT"}
 KEYMAP_LABEL = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放",
                 "SPACE": "跳跃", "SHIFT": "闪避"}
+
+# 编辑器键盘上方那一排小字（按键 → 含义）
+KEY_NAMES = {"A": "普攻", "Z": "重击", "E": "共鸣技能", "Q": "声骸技能",
+             "R": "共鸣解放", "1": "切 1", "2": "切 2", "3": "切 3",
+             "SPACE": "跳跃", "SHIFT": "闪避"}
 SKILL_NAME = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放"}
 LONG_MARKS = ("·长", "长按", "长", "+")
 SWITCH_STATES = (("变奏", "变奏"), ("变", "变奏"), ("合奏", "合奏"), ("合轴", "合轴"), ("合", "合轴"))
@@ -1043,13 +1048,6 @@ class Editor:
         action_btn("导入", self.import_team)
         self.keymap_btn = action_btn("键位", self.open_keymap)
 
-        # 键位速查（跟着自定义键位一起变）
-        self.legend = tk.Label(self.win, text="", bg="#0b0f16", fg=C_LABEL,
-                               anchor="w", justify="left",
-                               font=("Microsoft YaHei", max(8, int(8 * sc))))
-        self.legend.pack(fill="x", padx=int(10 * sc), pady=(0, int(6 * sc)))
-        self.refresh_legend()
-
         # 角色名 2x4
         grid = tk.Frame(self.win, bg=C_BG)
         grid.pack(fill="x", padx=int(10 * sc), pady=(0, int(6 * sc)))
@@ -1107,13 +1105,19 @@ class Editor:
         keys.pack(fill="x", padx=int(10 * sc), pady=(int(6 * sc), 0))
         self.sel_key = None
         self.key_btns = {}
-        for k in self.KEYS:
-            label = self.key_button_text(k)
-            b = tk.Button(keys, text=label, width=4, bd=0, bg=C_BAR, fg=C_TEXT,
+        self.key_labels = {}
+        for i in range(len(self.KEYS)):
+            keys.columnconfigure(i, weight=1, uniform="key")
+        for i, k in enumerate(self.KEYS):
+            lab = tk.Label(keys, text=KEY_NAMES.get(k, ""), bg=C_BG, fg=C_DIM,
+                           font=("Microsoft YaHei", max(7, int(8 * sc))))
+            lab.grid(row=0, column=i, sticky="s", padx=int(2 * sc), pady=(0, int(2 * sc)))
+            self.key_labels[k] = lab
+            b = tk.Button(keys, text=self.key_button_text(k), bd=0, bg=C_BAR, fg=C_TEXT,
                           activebackground="#1f2937", activeforeground="#fff",
                           font=("Microsoft YaHei", int(12 * sc), "bold"),
                           cursor="hand2", command=lambda kk=k: self.pick_key(kk))
-            b.pack(side="left", padx=(0, int(3 * sc)))
+            b.grid(row=1, column=i, sticky="we", padx=int(2 * sc))
             self.key_btns[k] = b
 
         # 修饰
@@ -1515,23 +1519,9 @@ class Editor:
             return self.app.keymap.get(k, k)
         return k
 
-    def refresh_legend(self):
-        km = self.app.keymap
-        space = "空格" if km.get("SPACE") == "SPACE" else km.get("SPACE")
-        shift = "Shift" if km.get("SHIFT") == "SHIFT" else km.get("SHIFT")
-        parts = ["A 普攻", "Z 重击",
-                 "%s 共鸣技能" % km.get("E", "E"),
-                 "%s 声骸技能" % km.get("Q", "Q"),
-                 "%s 共鸣解放" % km.get("R", "R"),
-                 "%s 跳跃" % space,
-                 "%s 闪避" % shift,
-                 "1/2/3 切人"]
-        self.legend.configure(text="   ".join(parts))
-
     def refresh_keypad(self):
         for k, b in self.key_btns.items():
             b.configure(text=self.key_button_text(k))
-        self.refresh_legend()
         self.refresh_axes()
         self.app.redraw()
 
