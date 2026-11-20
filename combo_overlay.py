@@ -628,17 +628,17 @@ class App:
 
     # ---------- 绘制 ----------
     def build_upcoming(self):
-        """永远凑满 n 格：剩余启动轴 + 循环轴（循环轴按顺序接上并无限续）。"""
+        """永远凑满 n 格：剩余当前轴 + 循环轴（从循环轴开头接着续）。
+
+        注意：self.seq 在循环轴里本身就是循环轴的一个后缀，
+        所以续接必须从循环轴第 0 个开始，否则会把末尾几个重复一遍。
+        """
         n = self.n
         items = list(self.seq)
         if self.loop_seq:
-            if self.mode == "start":
-                off = 0
-            else:
-                off = (self.total - len(self.seq)) if self.total else 0
             i = 0
             while len(items) < n:
-                items.append(self.loop_seq[(off + i) % len(self.loop_seq)])
+                items.append(self.loop_seq[i % len(self.loop_seq)])
                 i += 1
         return items[:n]
 
