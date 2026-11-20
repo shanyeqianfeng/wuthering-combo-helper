@@ -20,10 +20,18 @@ import time
 import tkinter as tk
 from ctypes import wintypes
 from tkinter import simpledialog, messagebox, ttk
+from tkinter import font as tkfont
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-# 数据目录：优先用环境变量（打包版把「方案」文件夹指过来），否则与程序同目录
-DATA_DIR = os.environ.get("COMBO_DATA_DIR") or APP_DIR
+FROZEN = getattr(sys, "frozen", False)
+if FROZEN:
+    # PyInstaller 单文件：__file__ 在临时解包目录，数据要放 exe 旁边
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    DEFAULT_DATA = os.path.join(APP_DIR, "方案")
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    DEFAULT_DATA = APP_DIR
+# 数据目录：优先环境变量，其次 exe 旁的「方案」/程序同目录
+DATA_DIR = os.environ.get("COMBO_DATA_DIR") or DEFAULT_DATA
 try:
     os.makedirs(DATA_DIR, exist_ok=True)
 except Exception:
@@ -817,6 +825,19 @@ class App:
         self.root.destroy()
 
 
+def _fit_font(canvas, text, max_w, size, bold=True, min_size=6):
+    """按像素宽度缩小字号，保证文字不出框。"""
+    try:
+        f = tkfont.Font(root=canvas, family="Microsoft YaHei", size=size,
+                        weight="bold" if bold else "normal")
+        while size > min_size and f.measure(text) > max_w:
+            size -= 1
+            f.configure(size=size)
+        return f
+    except Exception:
+        return ("Microsoft YaHei", size, "bold" if bold else "normal")
+
+
 def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False, compact=False):
     top_txt, bottom_txt = slot_texts(key, label)
     if bad:
@@ -824,25 +845,22 @@ def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False, compa
     small = max(6, int(0.085 * s))
     if compact:
         big = int(0.30 * s)
-        if len(disp) >= 3:
-            big = max(7, int(big * 2.0 / max(2, len(disp))))
-        c.create_text(x0 + s / 2, y0 + s * 0.36, text=disp, fill=fg,
-                      font=("Microsoft YaHei", big, "bold"))
+        f_big = _fit_font(c, disp, s * 0.84, big)
+        c.create_text(x0 + s / 2, y0 + s * 0.36, text=disp, fill=fg, font=f_big)
         if bottom_txt:
-            c.create_text(x0 + s / 2, y0 + s * 0.79, text=bottom_txt, fill=lf,
-                          font=("Microsoft YaHei", max(6, int(0.070 * s))))
+            f_small = _fit_font(c, bottom_txt, s * 0.92, max(6, int(0.070 * s)), bold=False)
+            c.create_text(x0 + s / 2, y0 + s * 0.79, text=bottom_txt, fill=lf, font=f_small)
         return
     if top_txt:
-        c.create_text(x0 + s / 2, y0 + s * 0.17, text=top_txt, fill=lf,
-                      font=("Microsoft YaHei", small))
+        f_top = _fit_font(c, top_txt, s * 0.90, small, bold=False)
+        c.create_text(x0 + s / 2, y0 + s * 0.17, text=top_txt, fill=lf, font=f_top)
     big = int(0.27 * s)
-    if len(disp) >= 3:
-        big = max(8, int(big * 2.0 / max(2, len(disp))))
-    c.create_text(x0 + s / 2, y0 + s * (0.48 if top_txt else 0.44), text=disp,
-                  fill=fg, font=("Microsoft YaHei", big, "bold"))
+    f_big = _fit_font(c, disp, s * 0.82, big)
+    c.create_text(x0 + s / 2, y0 + s * (0.46 if top_txt else 0.44), text=disp,
+                  fill=fg, font=f_big)
     if bottom_txt:
-        c.create_text(x0 + s / 2, y0 + s * 0.80, text=bottom_txt, fill=lf,
-                      font=("Microsoft YaHei", small))
+        f_small = _fit_font(c, bottom_txt, s * 0.92, small, bold=False)
+        c.create_text(x0 + s / 2, y0 + s * 0.80, text=bottom_txt, fill=lf, font=f_small)
 
 
 # ---------------- 编辑器 ----------------
