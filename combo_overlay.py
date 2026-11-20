@@ -178,8 +178,14 @@ def enable_dpi():
 IGNORE_VK = {0x11, 0x12, 0x14, 0x5B, 0x5C, 0x09, 0xA2, 0xA3, 0xA4, 0xA5, 0xFF}
 ALIAS = {"A": "LMB", "左键": "LMB", "普攻": "LMB", "Z": "LMB_HOLD", "重击": "LMB_HOLD",
          "右键": "RMB", "RMB": "RMB", "中键": "MMB", "MMB": "MMB",
-         "空格": "SPACE", "空格键": "SPACE", "SPACE": "SPACE",
-         "闪避": "SHIFT", "闪": "SHIFT", "SHIFT": "SHIFT", "SHIFT键": "SHIFT"}
+         "空格": "SPACE", "空格键": "SPACE", "SPACE": "SPACE", "跳跃": "SPACE",
+         "闪避": "SHIFT", "闪": "SHIFT", "SHIFT": "SHIFT", "SHIFT键": "SHIFT",
+         "共鸣技能": "E", "声骸技能": "Q", "共鸣解放": "R"}
+
+# 可自定义的键位（动作 → 物理键）；方案里只存动作名，物理键本地保存
+KEYMAP_DEFAULT = {"E": "E", "Q": "Q", "R": "R", "SPACE": "SPACE", "SHIFT": "SHIFT"}
+KEYMAP_LABEL = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放",
+                "SPACE": "跳跃", "SHIFT": "闪避"}
 SKILL_NAME = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放"}
 LONG_MARKS = ("·长", "长按", "长", "+")
 SWITCH_STATES = (("变奏", "变奏"), ("变", "变奏"), ("合奏", "合奏"), ("合轴", "合轴"), ("合", "合轴"))
@@ -222,6 +228,11 @@ def norm_key(text):
     return t.upper()
 
 
+DISP_DEFAULT = {"LMB": "A", "LMB_HOLD": "Z", "E": "E", "E_HOLD": "E",
+                "Q": "Q", "Q_HOLD": "Q", "R": "R", "R_HOLD": "R",
+                "SPACE": "跳跃", "SHIFT": "闪避"}
+
+
 def parse_token(tok):
     tok = tok.strip()
     if not tok:
@@ -247,11 +258,10 @@ def parse_token(tok):
         return None
     if hold and not key.endswith("_HOLD"):
         key += "_HOLD"
-    disp = (disp_override.strip() if disp_override else raw) or raw
-    if key == "SPACE" and not disp_override:
-        disp = "空格"
-    if key == "SHIFT" and not disp_override:
-        disp = "闪避"
+    if disp_override:
+        disp = disp_override.strip()
+    else:
+        disp = DISP_DEFAULT.get(key, raw)
     if state:
         label = state
     elif key in ("1", "2", "3"):
@@ -275,15 +285,24 @@ def parse_combo(text):
 
 
 def item_token(item):
+    """还原成标准写法（语义名，不含物理键位）。"""
     disp, key, label = item
     if key == "LMB":
-        return "A"
+        return "普攻"
     if key == "LMB_HOLD":
-        return "Z"
-    if key in ("E", "Q", "R", "E_HOLD", "Q_HOLD", "R_HOLD"):
-        return key[0] + ("长" if key.endswith("_HOLD") else "")
+        return "重击"
+    if key in ("E", "Q", "R"):
+        return SKILL_NAME[key]
+    if key in ("E_HOLD", "Q_HOLD", "R_HOLD"):
+        return SKILL_NAME[key[0]] + "长"
+    if key == "SPACE":
+        return "跳跃"
+    if key == "SHIFT":
+        return "闪避"
     if key in ("1", "2", "3") and label in ("变奏", "合轴", "合奏"):
         return key + label
+    if key in ("1", "2", "3"):
+        return key + "变奏"
     return key
 
 
@@ -322,7 +341,30 @@ TOKEN_TO_BYTE = {
     "3变奏": 0x24, "3合轴": 0x25,
     "SPACE": 0x30, "RMB": 0x31, "MMB": 0x32, "SHIFT": 0x33,
 }
-BYTE_TO_TOKEN = {v: k for k, v in TOKEN_TO_BYTE.items()}
+BYTE_TO_TOKEN = {
+    0x01: "普攻", 0x02: "重击",
+    0x10: "共鸣技能", 0x11: "共鸣技能长",
+    0x12: "声骸技能", 0x13: "声骸技能长",
+    0x14: "共鸣解放", 0x15: "共鸣解放长",
+    0x20: "1变奏", 0x21: "1合轴", 0x22: "2变奏", 0x23: "2合轴",
+    0x24: "3变奏", 0x25: "3合轴",
+    0x30: "跳跃", 0x31: "右键", 0x32: "中键", 0x33: "闪避",
+}
+
+# 动作（内部 key）→ 字节
+KEY_TO_BYTE = {"LMB": 0x01, "LMB_HOLD": 0x02,
+               "E": 0x10, "E_HOLD": 0x11, "Q": 0x12, "Q_HOLD": 0x13,
+               "R": 0x14, "R_HOLD": 0x15,
+               "SPACE": 0x30, "RMB": 0x31, "MMB": 0x32, "SHIFT": 0x33}
+SWITCH_BASE = {"1": 0x20, "2": 0x22, "3": 0x24}
+
+
+def item_byte(item):
+    disp, key, label = item
+    if key in SWITCH_BASE:
+        base = SWITCH_BASE[key]
+        return base if (label or "变奏") in ("变奏",) else base + 1
+    return KEY_TO_BYTE.get(key)
 
 
 def _team_code(payload):
@@ -366,10 +408,9 @@ def encode_team(team):
             return None, "某一轴的招太多（超过 255 个）"
         codes = []
         for item in items:
-            tok = item_token(item)
-            b = TOKEN_TO_BYTE.get(tok)
+            b = item_byte(item)
             if b is None:
-                return None, f"这一招暂时不能分享：{tok}"
+                return None, f"这一招暂时不能分享：{item_token(item)}"
             codes.append(b)
         buf.append(len(codes))
         buf.extend(codes)
@@ -506,6 +547,9 @@ class App:
         self.flash_ms, self.wrong_ms = int(cfg["flash_ms"]), int(cfg["wrong_ms"])
         self.hold_ms = int(cfg["hold_ms"])
         self.locked = bool(cfg.get("locked", False))
+        self.keymap = dict(KEYMAP_DEFAULT)
+        self.keymap.update(cfg.get("keymap") or {})
+        self.cfg["keymap"] = dict(self.keymap)
 
         self.teams = load_teams()
         self.mode = "start"
@@ -673,6 +717,8 @@ class App:
                                    outline="#1b2029", width=1, dash=(2, 4))
                 continue
             disp, key, label = item
+            if key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
+                disp = self.keymap.get(key[0], key[0])
             if key in ("1", "2", "3"):
                 nm = (names.get(key) or "").strip()
                 if nm:
@@ -719,6 +765,22 @@ class App:
                 pass
         return False
 
+    def resolve_input(self, label, dur):
+        """物理输入 → 动作（按本地键位表翻译），再按阈值补长按后缀。
+
+        未绑定的键返回 None（忽略，避免和字母同名动作混淆）。
+        """
+        rev = {phys: act for act, phys in self.keymap.items()}
+        for fixed in ("LMB", "LMB_HOLD", "RMB", "MMB", "1", "2", "3"):
+            rev.setdefault(fixed, fixed)
+        act = rev.get(label)
+        if act is None:
+            return None
+        holdable = act in ("E", "Q", "R")
+        if holdable and dur >= self.hold_ms:
+            act += "_HOLD"
+        return act
+
     def handle(self, kind, val, extra=0, pos=None):
         if self.paused or (self.editor and self.editor.alive):
             return
@@ -726,14 +788,17 @@ class App:
             if self._in_ui(pos):
                 return
             label = val + ("_HOLD" if extra >= self.hold_ms and val not in NO_HOLD_KEYS else "")
+            act = label
         else:
             base = vk_label(val)
             if not base:
                 return
-            label = base + ("_HOLD" if extra >= self.hold_ms and base not in NO_HOLD_KEYS else "")
+            act = self.resolve_input(base, extra)
+            if act is None:
+                return
         if not self.seq:
             return
-        if label == self.seq[0][1]:
+        if act == self.seq[0][1]:
             self.on_correct()
         else:
             self.on_wrong()
@@ -946,6 +1011,7 @@ class Editor:
         action_btn("删除", self.del_team)
         action_btn("分享", self.share_team)
         action_btn("导入", self.import_team)
+        action_btn("键位", self.open_keymap)
 
         # 角色名 2x4
         grid = tk.Frame(self.win, bg=C_BG)
@@ -1005,9 +1071,8 @@ class Editor:
         self.sel_key = None
         self.key_btns = {}
         for k in self.KEYS:
-            label = {"SPACE": "空格", "SHIFT": "闪避"}.get(k, k)
-            b = tk.Button(keys, text=label, width=(4 if k in ("SPACE", "SHIFT") else 3), bd=0,
-                          bg=C_BAR, fg=C_TEXT,
+            label = self.key_button_text(k)
+            b = tk.Button(keys, text=label, width=4, bd=0, bg=C_BAR, fg=C_TEXT,
                           activebackground="#1f2937", activeforeground="#fff",
                           font=("Microsoft YaHei", int(12 * sc), "bold"),
                           cursor="hand2", command=lambda kk=k: self.pick_key(kk))
@@ -1169,6 +1234,8 @@ class Editor:
                     nm = (self.team().get("names") or {}).get(key, "").strip()
                     if nm:
                         disp = nm[0]  # 小方框只显示首字，避免出圈
+                elif key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
+                    disp = self.app.keymap.get(key[0], key[0])
                 cv.create_rectangle(x, y, x + size, y + size, fill="#151a23",
                                     outline="#2a3240")
                 paint_slot_text(cv, x, y, size, sc, disp, key, label,
@@ -1400,6 +1467,106 @@ class Editor:
                   font=("Microsoft YaHei", int(9 * sc)), padx=int(8 * sc),
                   cursor="hand2").pack(side="right")
         return dlg
+
+    # --- 键位 ---
+    def key_button_text(self, k):
+        if k == "SPACE":
+            return "空格"
+        if k == "SHIFT":
+            return "Shift"
+        if k in ("E", "Q", "R"):
+            return self.app.keymap.get(k, k)
+        return k
+
+    def refresh_keypad(self):
+        for k, b in self.key_btns.items():
+            b.configure(text=self.key_button_text(k))
+        self.refresh_axes()
+        self.app.redraw()
+
+    def open_keymap(self):
+        sc = self.app.scale
+        w, h = int(460 * sc), int(300 * sc)
+        dlg = self._dialog("自定义键位", w, h)
+        fs = max(9, int(9 * sc))
+
+        tk.Label(dlg, text="方案与分享码只保存动作名，键位只在本机生效",
+                 bg=C_BG, fg=C_DIM, font=("Microsoft YaHei", max(7, int(8 * sc)))).pack(
+            anchor="w", padx=int(10 * sc), pady=(int(8 * sc), int(4 * sc)))
+
+        rows = tk.Frame(dlg, bg=C_BG)
+        rows.pack(fill="x", padx=int(10 * sc))
+        rows.columnconfigure(1, weight=1)
+        btns = {}
+        for act in ("E", "Q", "R", "SPACE", "SHIFT"):
+            tk.Label(rows, text=KEYMAP_LABEL[act], bg=C_BG, fg=C_TEXT,
+                     font=("Microsoft YaHei", fs), anchor="w", width=8).grid(
+                row=("E", "Q", "R", "SPACE", "SHIFT").index(act), column=0,
+                sticky="w", pady=int(3 * sc))
+            b = tk.Button(rows, text=self.app.keymap.get(act, KEYMAP_DEFAULT[act]),
+                          bd=0, bg=C_BAR, fg=C_GREEN, cursor="hand2",
+                          font=("Microsoft YaHei", fs, "bold"), padx=int(10 * sc))
+            b.grid(row=("E", "Q", "R", "SPACE", "SHIFT").index(act), column=1,
+                   sticky="we", pady=int(3 * sc))
+            btns[act] = b
+
+        state = {"cap": None}
+        ORDER = ("E", "Q", "R", "SPACE", "SHIFT")
+
+        def start_capture(act):
+            state["cap"] = act
+            for a, b in btns.items():
+                b.configure(text="按任意键…" if a == act else self.app.keymap.get(a, KEYMAP_DEFAULT[a]),
+                            bg=C_ACCENT if a == act else C_BAR)
+
+        for act, b in btns.items():
+            b.configure(command=lambda a=act: start_capture(a))
+
+        def keysym_to_label(ks):
+            if ks in ("space",):
+                return "SPACE"
+            if ks in ("Shift_L", "Shift_R"):
+                return "SHIFT"
+            if ks in ("Escape",):
+                return None
+            if len(ks) == 1 and ks.isprintable():
+                return ks.upper()
+            return None
+
+        def on_key(ev):
+            act = state["cap"]
+            if not act:
+                return
+            lab = keysym_to_label(ev.keysym)
+            state["cap"] = None
+            if lab:
+                self.app.keymap[act] = lab
+            for a, b in btns.items():
+                b.configure(text=self.app.keymap.get(a, KEYMAP_DEFAULT[a]),
+                            bg=C_BAR)
+
+        dlg.bind("<KeyPress>", on_key)
+        dlg.focus_set()
+
+        def reset_default():
+            self.app.keymap = dict(KEYMAP_DEFAULT)
+            for a, b in btns.items():
+                b.configure(text=KEYMAP_DEFAULT[a], bg=C_BAR)
+
+        def close_dlg():
+            self.app.cfg["keymap"] = dict(self.app.keymap)
+            save_settings(self.app.cfg)
+            self.refresh_keypad()
+            dlg.destroy()
+
+        row = tk.Frame(dlg, bg=C_BG)
+        row.pack(fill="x", padx=int(10 * sc), pady=int(8 * sc))
+        tk.Button(row, text="恢复默认", command=reset_default, bd=0, bg=C_BAR, fg=C_TEXT,
+                  font=("Microsoft YaHei", fs), padx=int(10 * sc),
+                  cursor="hand2").pack(side="left")
+        tk.Button(row, text="保存并关闭", command=close_dlg, bd=0, bg=C_ACCENT, fg="#fff",
+                  font=("Microsoft YaHei", fs), padx=int(10 * sc),
+                  cursor="hand2").pack(side="right")
 
     def save_and_close(self):
         self.commit()
