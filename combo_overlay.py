@@ -177,6 +177,7 @@ def _mouse_proc(nCode, wParam, lParam):
                 start = _down_mouse.pop(("X", nm), None)
                 dur = (time.time() - start) * 1000.0 if start else 0.0
                 events.put(("mouse", nm, dur, (int(ms.pt.x), int(ms.pt.y))))
+
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
 
@@ -204,6 +205,12 @@ def click_through(hwnd, on=True):
     else:
         ex &= ~WS_EX_TRANSPARENT
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex)
+
+
+# ---- 轮询式输入采集（有些游戏/反作弊会把低级键盘钩子挡掉，改用 GetAsyncKeyState）----
+POLL_VKS = (list(range(0x41, 0x5B)) + list(range(0x30, 0x3A))
+            + [0x20, 0xA0, 0xA1, 0x01, 0x02, 0x04, 0x05, 0x06])
+MOUSE_VK = {0x01: "LMB", 0x02: "RMB", 0x04: "MMB", 0x05: "X1", 0x06: "X2"}
 
 
 def force_topmost(hwnd):
@@ -667,6 +674,7 @@ class App:
         # 始终记录一份轻量日志（超过 256KB 自动重置），排查「按键没反应」用
         self.debug = True
         self.debug_path = os.path.join(DATA_DIR, "debug.log")
+        self._ks = {}
         try:
             if os.path.exists(self.debug_path) and os.path.getsize(self.debug_path) > 256 * 1024:
                 os.remove(self.debug_path)
@@ -890,6 +898,41 @@ class App:
         except queue.Empty:
             pass
         self.root.after(25, self.poll)
+
+    def _cursor_pos(self):
+        try:
+            pt = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            return (int(pt.x), int(pt.y))
+        except Exception:
+            return (0, 0)
+
+    def start_poll(self):
+        self.root.after(12, self._poll_keys)
+
+    def _poll_keys(self):
+        try:
+            for vk in POLL_VKS:
+                down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+                prev = self._ks.get(vk)
+                if down and prev is None:
+                    self._ks[vk] = time.time()
+                    self._log("POLL-DOWN vk=%d fg=%s" % (vk, self._fg_title()))
+                    if _capture["on"]:
+                        _cap_queue.put(MOUSE_VK.get(vk, vk))
+                elif (not down) and isinstance(prev, float):
+                    dur = (time.time() - prev) * 1000.0
+                    self._ks[vk] = None
+                    if _capture["on"]:
+                        continue
+                    self._log("POLL-UP vk=%d dur=%d" % (vk, int(dur)))
+                    if vk in MOUSE_VK:
+                        events.put(("mouse", MOUSE_VK[vk], dur, self._cursor_pos()))
+                    else:
+                        events.put(("key", vk, dur, None))
+        except Exception:
+            pass
+        self.root.after(12, self._poll_keys)
 
     def _in_ui(self, pos):
         if not pos:
@@ -2087,7 +2130,10 @@ def main():
     root = tk.Tk()
     app = App(root, cfg, scale)
     threading.Thread(target=pump, daemon=True).start()
-    install_hooks()
+    if os.environ.get("COMBO_USE_HOOKS"):
+        install_hooks()          # 兜底：需要钩子时手动开启
+    else:
+        app.start_poll()         # 默认轮询采集，避免被游戏/反作弊挡钩子
     root.after(300, lambda: click_through(app.hwnd(), app.locked))
     if os.environ.get("COMBO_OPEN_EDITOR"):
         root.after(600, app.open_editor)
