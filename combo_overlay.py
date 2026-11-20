@@ -998,7 +998,9 @@ def _fit_font(canvas, text, max_w, size, bold=True, min_size=6):
         return ("Microsoft YaHei", size, "bold" if bold else "normal")
 
 
-def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False, compact=False):
+def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False,
+                    compact=False, tag=None):
+    tags = (tag,) if tag else ()
     top_txt, bottom_txt = slot_texts(key, label)
     if bad:
         bottom_txt = "按错了"
@@ -1006,21 +1008,25 @@ def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False, compa
     if compact:
         big = int(0.30 * s)
         f_big = _fit_font(c, disp, s * 0.84, big)
-        c.create_text(x0 + s / 2, y0 + s * 0.36, text=disp, fill=fg, font=f_big)
+        c.create_text(x0 + s / 2, y0 + s * 0.36, text=disp, fill=fg, font=f_big,
+                      tags=tags)
         if bottom_txt:
             f_small = _fit_font(c, bottom_txt, s * 0.92, max(6, int(0.070 * s)), bold=False)
-            c.create_text(x0 + s / 2, y0 + s * 0.79, text=bottom_txt, fill=lf, font=f_small)
+            c.create_text(x0 + s / 2, y0 + s * 0.79, text=bottom_txt, fill=lf,
+                          font=f_small, tags=tags)
         return
     if top_txt:
         f_top = _fit_font(c, top_txt, s * 0.90, small, bold=False)
-        c.create_text(x0 + s / 2, y0 + s * 0.17, text=top_txt, fill=lf, font=f_top)
+        c.create_text(x0 + s / 2, y0 + s * 0.17, text=top_txt, fill=lf, font=f_top,
+                      tags=tags)
     big = int(0.27 * s)
     f_big = _fit_font(c, disp, s * 0.82, big)
     c.create_text(x0 + s / 2, y0 + s * (0.46 if top_txt else 0.44), text=disp,
-                  fill=fg, font=f_big)
+                  fill=fg, font=f_big, tags=tags)
     if bottom_txt:
         f_small = _fit_font(c, bottom_txt, s * 0.92, small, bold=False)
-        c.create_text(x0 + s / 2, y0 + s * 0.80, text=bottom_txt, fill=lf, font=f_small)
+        c.create_text(x0 + s / 2, y0 + s * 0.80, text=bottom_txt, fill=lf,
+                      font=f_small, tags=tags)
 
 
 # ---------------- 编辑器 ----------------
@@ -1061,6 +1067,7 @@ class Editor:
             w.bind("<Button-1>", self._win_drag_start)
             w.bind("<B1-Motion>", self._win_drag_move)
         self.axes = {"start": [], "loop": []}
+        self.insert_pos = None
         self.axis_var = tk.StringVar(value="启动轴")
 
         # 方案行
@@ -1335,10 +1342,13 @@ class Editor:
                         disp = nm[0]  # 小方框只显示首字，避免出圈
                 elif key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
                     disp = phys_short(self.app.keymap.get(key[0], key[0]))
+                tag = "n_%s_%d" % (axis, idx)
                 cv.create_rectangle(x, y, x + size, y + size, fill="#151a23",
-                                    outline="#2a3240")
+                                    outline="#2a3240", tags=(tag,))
                 paint_slot_text(cv, x, y, size, sc, disp, key, label,
-                                "#c9d3e0", "#7a8598", compact=True)
+                                "#c9d3e0", "#7a8598", compact=True, tag=tag)
+                cv.tag_bind(tag, "<Button-1>",
+                            lambda e, a=axis, i=idx: self.node_menu(e, a, i))
             cv.configure(scrollregion=(0, 0, wpx, pad + rows * rowh + pad))
 
     def new_team(self):
@@ -1443,7 +1453,12 @@ class Editor:
             self.preview.configure(text="先选一个键", fg=C_RED)
             return
         top, bottom = slot_texts(item[1], item[2])
-        txt = f"将载入【{self.axis_var.get()}】：{item[0]}"
+        if getattr(self, "insert_pos", None):
+            a, p = self.insert_pos
+            aname = "启动轴" if a == "start" else "循环轴"
+            txt = f"将在【{aname}】第 {p} 个之后插入：{item[0]}"
+        else:
+            txt = f"将载入【{self.axis_var.get()}】：{item[0]}"
         if top:
             txt += f"  {top}"
         if bottom:
@@ -1456,10 +1471,83 @@ class Editor:
             self.preview.configure(text="先选一个键", fg=C_RED)
             return
         axis = "start" if self.axis_var.get() == "启动轴" else "loop"
-        self.axes[axis].append(parse_token(tok))
+        item = parse_token(tok)
+        ins = getattr(self, "insert_pos", None)
+        if ins:
+            i_axis, i_pos = ins
+            self.axes[i_axis].insert(min(i_pos, len(self.axes[i_axis])), item)
+            self.insert_pos = None
+        else:
+            self.axes[axis].append(item)
         self.commit()
         self.refresh_axes()
         self.app.apply_team()
+        self.update_preview()
+
+    # --- 节点：删除 / 插入 ---
+    def node_menu(self, ev, axis, idx):
+        if idx >= len(self.axes[axis]):
+            return
+        self.close_node_popup()
+        sc = self.app.scale
+        pop = tk.Toplevel(self.win)
+        pop.overrideredirect(True)
+        pop.configure(bg=C_PANEL)
+        pop.attributes("-topmost", True)
+        pop.geometry("+%d+%d" % (ev.x_root, ev.y_root))
+        self._node_popup = pop
+
+        def close():
+            self.close_node_popup()
+
+        tk.Label(pop, text="第 %d 个节点" % (idx + 1), bg=C_PANEL, fg=C_DIM,
+                 font=("Microsoft YaHei", max(7, int(8 * sc)))).pack(
+            fill="x", padx=int(10 * sc), pady=(int(5 * sc), int(2 * sc)))
+
+        def do_delete():
+            close()
+            self.delete_node(axis, idx)
+
+        def do_insert():
+            close()
+            self.begin_insert(axis, idx)
+
+        for text, cmd, color in (("删除这一个", do_delete, "#7f1d1d"),
+                                 ("在后面插入", do_insert, None),
+                                 ("取消", close, None)):
+            tk.Button(pop, text=text, command=cmd, bd=0, relief="flat",
+                      bg=(color or C_BAR), fg="#ffffff" if color else C_TEXT,
+                      activebackground=C_ACCENT, activeforeground="#ffffff",
+                      font=("Microsoft YaHei", max(9, int(9 * sc))),
+                      padx=int(16 * sc), pady=int(3 * sc),
+                      cursor="hand2").pack(fill="x", padx=int(4 * sc), pady=int(2 * sc))
+
+        pop.bind("<FocusOut>", lambda e: self.close_node_popup())
+        pop.focus_set()
+
+    def close_node_popup(self):
+        pop = getattr(self, "_node_popup", None)
+        if pop is not None:
+            try:
+                pop.destroy()
+            except Exception:
+                pass
+        self._node_popup = None
+
+    def delete_node(self, axis, idx):
+        if idx >= len(self.axes[axis]):
+            return
+        self.axes[axis].pop(idx)
+        if getattr(self, "insert_pos", None):
+            self.insert_pos = None
+        self.commit()
+        self.refresh_axes()
+        self.app.apply_team()
+
+    def begin_insert(self, axis, idx):
+        self.insert_pos = (axis, idx + 1)
+        self.axis_var.set("启动轴" if axis == "start" else "循环轴")
+        self.update_preview()
 
     def undo_move(self):
         axis = "start" if self.axis_var.get() == "启动轴" else "loop"
