@@ -1034,7 +1034,7 @@ class Editor:
         self.win = tk.Toplevel(app.root)
         self.win.overrideredirect(True)          # 去掉系统白色标题栏
         self.win.configure(bg=C_BG)
-        ww, wh = int(720 * sc), int(650 * sc)   # 含自绘标题栏 + 键位速查行
+        ww, wh = int(720 * sc), int(770 * sc)   # 两条轴各三排，不滚动
         sx = max(0, (self.win.winfo_screenwidth() - ww) // 2)
         sy = max(0, (self.win.winfo_screenheight() - wh) // 2 - int(60 * sc))
         self.win.geometry(f"{ww}x{wh}+{sx}+{sy}")
@@ -1129,7 +1129,11 @@ class Editor:
             command=self.save_names)
         self.save_names_btn.grid(row=1, column=3, sticky="nsew", padx=(int(4 * sc), 0))
 
-        # 两条轴
+        # 两条轴（高度固定显示三排，不滚动）
+        self.ax_size = int(40 * sc)
+        self.ax_gap = int(6 * sc)
+        self.ax_pad = int(4 * sc)
+        ax_h = 3 * (self.ax_size + self.ax_gap) + 2 * self.ax_pad
         self.axis_canvas = {}
         for axis, title, color in (("start", "启动轴", C_START), ("loop", "循环轴", C_LOOP)):
             row = tk.Frame(self.win, bg=C_BG)
@@ -1137,7 +1141,7 @@ class Editor:
             tk.Label(row, text=title, bg=C_BG, fg=color, width=5, anchor="n",
                      font=("Microsoft YaHei", fs, "bold")).pack(
                 side="left", anchor="n", pady=(int(6 * sc), 0))
-            cv = tk.Canvas(row, bg="#0b0f16", height=int(100 * sc),
+            cv = tk.Canvas(row, bg="#0b0f16", height=ax_h,
                            highlightthickness=0)
             cv.pack(side="left", fill="x", expand=True)
             cv.bind("<Configure>", self._on_canvas_resize)
@@ -1303,7 +1307,7 @@ class Editor:
         """固定窗口大小：画布高度不变，招多时自动换行并在框内滚动。"""
         self._resize_job = None
         sc = self.app.scale
-        size, gap, pad = int(40 * sc), int(6 * sc), int(4 * sc)
+        size, gap, pad = self.ax_size, self.ax_gap, self.ax_pad
         rowh = size + gap
         for axis, cv in self.axis_canvas.items():
             wpx = cv.winfo_width()
