@@ -97,12 +97,28 @@ user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctyp
                                 ctypes.c_int, ctypes.c_int, wintypes.UINT]
 
 
+_capture = {"cb": None}
+
+
+def set_capture(cb):
+    """设置一次性按键捕获回调（True 时键盘钩子会吞掉按键，避免触发输入法）。"""
+    _capture["cb"] = cb
+
+
 def _keyboard_proc(nCode, wParam, lParam):
     if nCode == 0:
         kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+        vk = int(kb.vkCode)
+        cb = _capture["cb"]
+        if cb is not None:
+            if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                try:
+                    cb(vk)
+                except Exception:
+                    pass
+            return 1          # 捕获期间吞掉所有键，输入法拿不到
         if kb.flags & 0x10:
             return user32.CallNextHookEx(None, nCode, wParam, lParam)
-        vk = int(kb.vkCode)
         if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
             _down_key.setdefault(vk, time.time())
         elif wParam in (WM_KEYUP, WM_SYSKEYUP):
@@ -656,7 +672,9 @@ class App:
         return user32.GetParent(self.root.winfo_id())
 
     def _tick_topmost(self):
-        if self.locked:
+        # 编辑器/对话框开着的时候不要把主窗口顶到它们上面
+        busy = bool(self.editor and self.editor.alive)
+        if self.locked and not busy:
             force_topmost(self.hwnd())
             try:
                 force_topmost(user32.GetParent(self.ctrl.winfo_id()))
@@ -948,13 +966,14 @@ class Editor:
         self.win = tk.Toplevel(app.root)
         self.win.overrideredirect(True)          # 去掉系统白色标题栏
         self.win.configure(bg=C_BG)
-        ww, wh = int(720 * sc), int(600 * sc)   # 含自绘标题栏
+        ww, wh = int(720 * sc), int(650 * sc)   # 含自绘标题栏 + 键位速查行
         sx = max(0, (self.win.winfo_screenwidth() - ww) // 2)
-        sy = max(0, (self.win.winfo_screenheight() - wh) // 2)
+        sy = max(0, (self.win.winfo_screenheight() - wh) // 2 - int(60 * sc))
         self.win.geometry(f"{ww}x{wh}+{sx}+{sy}")
         self.ww, self.wh, self.wx, self.wy = ww, wh, sx, sy
         self._resize_job = None
         self.win.attributes("-topmost", True)
+        self.win.lift()
         self.win.protocol("WM_DELETE_WINDOW", self.close)
 
         fs = max(9, int(9 * sc))
@@ -1013,7 +1032,14 @@ class Editor:
         action_btn("删除", self.del_team)
         action_btn("分享", self.share_team)
         action_btn("导入", self.import_team)
-        action_btn("键位", self.open_keymap)
+        self.keymap_btn = action_btn("键位", self.open_keymap)
+
+        # 键位速查（跟着自定义键位一起变）
+        self.legend = tk.Label(self.win, text="", bg="#0b0f16", fg=C_LABEL,
+                               anchor="w", justify="left",
+                               font=("Microsoft YaHei", max(8, int(8 * sc))))
+        self.legend.pack(fill="x", padx=int(10 * sc), pady=(0, int(6 * sc)))
+        self.refresh_legend()
 
         # 角色名 2x4
         grid = tk.Frame(self.win, bg=C_BG)
@@ -1480,9 +1506,23 @@ class Editor:
             return self.app.keymap.get(k, k)
         return k
 
+    def refresh_legend(self):
+        km = self.app.keymap
+        space = "空格" if km.get("SPACE") == "SPACE" else km.get("SPACE")
+        shift = "Shift" if km.get("SHIFT") == "SHIFT" else km.get("SHIFT")
+        parts = ["A 普攻", "Z 重击",
+                 "%s 共鸣技能" % km.get("E", "E"),
+                 "%s 声骸技能" % km.get("Q", "Q"),
+                 "%s 共鸣解放" % km.get("R", "R"),
+                 "%s 跳跃" % space,
+                 "%s 闪避" % shift,
+                 "1/2/3 切人"]
+        self.legend.configure(text="   ".join(parts))
+
     def refresh_keypad(self):
         for k, b in self.key_btns.items():
             b.configure(text=self.key_button_text(k))
+        self.refresh_legend()
         self.refresh_axes()
         self.app.redraw()
 
@@ -1513,7 +1553,29 @@ class Editor:
             btns[act] = b
 
         state = {"cap": None}
-        ORDER = ("E", "Q", "R", "SPACE", "SHIFT")
+
+        def label_for_vk(vk):
+            if vk in (0x10, 0xA0, 0xA1):
+                return "SHIFT"
+            if vk == 0x20:
+                return "SPACE"
+            if 0x41 <= vk <= 0x5A:
+                return chr(vk)
+            if 0x30 <= vk <= 0x39:
+                return chr(vk)
+            if 0x60 <= vk <= 0x69:
+                return chr(vk - 0x60 + 0x30)
+            return None
+
+        def finish(act, lab):
+            state["cap"] = None
+            set_capture(None)
+            if lab:
+                self.app.keymap[act] = lab
+            for a, b in btns.items():
+                b.configure(text=self.app.keymap.get(a, KEYMAP_DEFAULT[a]), bg=C_BAR)
+            # 立刻同步：键盘按钮 / 键位速查 / 两条轴 / 主窗口
+            self.refresh_keypad()
 
         def start_capture(act):
             state["cap"] = act
@@ -1521,45 +1583,31 @@ class Editor:
                 b.configure(text="按任意键…" if a == act else self.app.keymap.get(a, KEYMAP_DEFAULT[a]),
                             bg=C_ACCENT if a == act else C_BAR)
 
+            def on_vk(vk):
+                # 钩子线程回调 → 交回 Tk 线程
+                lab = None if vk == 0x1B else label_for_vk(vk)
+                self.app.root.after(0, lambda: finish(act, lab))
+            set_capture(on_vk)
+
         for act, b in btns.items():
             b.configure(command=lambda a=act: start_capture(a))
 
-        def keysym_to_label(ks):
-            if ks in ("space",):
-                return "SPACE"
-            if ks in ("Shift_L", "Shift_R"):
-                return "SHIFT"
-            if ks in ("Escape",):
-                return None
-            if len(ks) == 1 and ks.isprintable():
-                return ks.upper()
-            return None
-
-        def on_key(ev):
-            act = state["cap"]
-            if not act:
-                return
-            lab = keysym_to_label(ev.keysym)
-            state["cap"] = None
-            if lab:
-                self.app.keymap[act] = lab
-            for a, b in btns.items():
-                b.configure(text=self.app.keymap.get(a, KEYMAP_DEFAULT[a]),
-                            bg=C_BAR)
-
-        dlg.bind("<KeyPress>", on_key)
-        dlg.focus_set()
-
         def reset_default():
+            set_capture(None)
+            state["cap"] = None
             self.app.keymap = dict(KEYMAP_DEFAULT)
             for a, b in btns.items():
                 b.configure(text=KEYMAP_DEFAULT[a], bg=C_BAR)
+            self.refresh_keypad()
 
         def close_dlg():
+            set_capture(None)
             self.app.cfg["keymap"] = dict(self.app.keymap)
             save_settings(self.app.cfg)
             self.refresh_keypad()
             dlg.destroy()
+
+        dlg.bind("<Destroy>", lambda e: set_capture(None))
 
         row = tk.Frame(dlg, bg=C_BG)
         row.pack(fill="x", padx=int(10 * sc), pady=int(8 * sc))
