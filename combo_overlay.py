@@ -664,8 +664,14 @@ class App:
         self.keymap = dict(KEYMAP_DEFAULT)
         self.keymap.update(cfg.get("keymap") or {})
         self.cfg["keymap"] = dict(self.keymap)
-        self.debug = bool(os.environ.get("COMBO_DEBUG"))
+        # 始终记录一份轻量日志（超过 256KB 自动重置），排查「按键没反应」用
+        self.debug = True
         self.debug_path = os.path.join(DATA_DIR, "debug.log")
+        try:
+            if os.path.exists(self.debug_path) and os.path.getsize(self.debug_path) > 256 * 1024:
+                os.remove(self.debug_path)
+        except Exception:
+            pass
         self.admin = is_admin()
         self.need_admin = False
 
@@ -915,16 +921,20 @@ class App:
             return key, None
         return None, None
 
+    def _log(self, msg):
+        if not self.debug:
+            return
+        try:
+            with open(self.debug_path, "a", encoding="utf-8") as fp:
+                fp.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
+        except Exception:
+            pass
+
     def handle(self, kind, val, extra=0, pos=None):
-        if self.debug:
-            try:
-                with open(self.debug_path, "a", encoding="utf-8") as fp:
-                    fp.write("%s %s %s dur=%d paused=%s editor=%s seq=%s\n" % (
-                        time.strftime("%H:%M:%S"), kind, val, extra,
-                        self.paused, bool(self.editor and self.editor.alive),
-                        self.seq[0][1] if self.seq else None))
-            except Exception:
-                pass
+        self._log("IN %s %s dur=%d paused=%s editor=%s expect=%s" % (
+            kind, val, extra, self.paused,
+            bool(self.editor and self.editor.alive),
+            self.seq[0][1] if self.seq else None))
         if self.paused or (self.editor and self.editor.alive):
             return
         if not self.seq:
@@ -942,11 +952,14 @@ class App:
         if want is None:
             return
         if phys != want:
+            self._log("MISS want=%s got=%s" % (want, phys))
             self.on_wrong()
             return
         if want_hold is not None and hold != want_hold:
+            self._log("HOLD-MISMATCH want_hold=%s got=%s" % (want_hold, hold))
             self.on_wrong()
             return
+        self._log("HIT %s" % phys)
         self.on_correct()
 
     def on_correct(self):
