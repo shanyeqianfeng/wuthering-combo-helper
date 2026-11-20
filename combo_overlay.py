@@ -97,25 +97,34 @@ user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctyp
                                 ctypes.c_int, ctypes.c_int, wintypes.UINT]
 
 
-_capture = {"cb": None}
+_capture = {"on": False}
+_cap_queue = queue.Queue()
 
 
-def set_capture(cb):
-    """设置一次性按键捕获回调（True 时键盘钩子会吞掉按键，避免触发输入法）。"""
-    _capture["cb"] = cb
+def set_capture(on):
+    """开关按键捕获。钩子线程只往队列塞 vk，绝不碰 Tk（跨线程调用 Tcl 会直接崩）。"""
+    _capture["on"] = bool(on)
+    while not _cap_queue.empty():
+        try:
+            _cap_queue.get_nowait()
+        except Exception:
+            break
+
+
+def take_captured():
+    try:
+        return _cap_queue.get_nowait()
+    except queue.Empty:
+        return None
 
 
 def _keyboard_proc(nCode, wParam, lParam):
     if nCode == 0:
         kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
         vk = int(kb.vkCode)
-        cb = _capture["cb"]
-        if cb is not None:
+        if _capture["on"]:
             if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                try:
-                    cb(vk)
-                except Exception:
-                    pass
+                _cap_queue.put(vk)
             return 1          # 捕获期间吞掉所有键，输入法拿不到
         if kb.flags & 0x10:
             return user32.CallNextHookEx(None, nCode, wParam, lParam)
@@ -1569,7 +1578,7 @@ class Editor:
 
         def finish(act, lab):
             state["cap"] = None
-            set_capture(None)
+            set_capture(False)
             if lab:
                 self.app.keymap[act] = lab
             for a, b in btns.items():
@@ -1582,18 +1591,32 @@ class Editor:
             for a, b in btns.items():
                 b.configure(text="按任意键…" if a == act else self.app.keymap.get(a, KEYMAP_DEFAULT[a]),
                             bg=C_ACCENT if a == act else C_BAR)
+            set_capture(True)
+            deadline = time.time() + 6.0          # 6 秒没按键就自动取消，避免一直吞键
 
-            def on_vk(vk):
-                # 钩子线程回调 → 交回 Tk 线程
-                lab = None if vk == 0x1B else label_for_vk(vk)
-                self.app.root.after(0, lambda: finish(act, lab))
-            set_capture(on_vk)
+            def poll():
+                if not dlg.winfo_exists():
+                    set_capture(False)
+                    return
+                vk = take_captured()
+                if vk is not None:
+                    finish(act, None if vk == 0x1B else label_for_vk(vk))
+                    return
+                if time.time() > deadline or state["cap"] != act:
+                    set_capture(False)
+                    state["cap"] = None
+                    for a, b in btns.items():
+                        b.configure(text=self.app.keymap.get(a, KEYMAP_DEFAULT[a]), bg=C_BAR)
+                    return
+                dlg.after(50, poll)
+
+            dlg.after(50, poll)
 
         for act, b in btns.items():
             b.configure(command=lambda a=act: start_capture(a))
 
         def reset_default():
-            set_capture(None)
+            set_capture(False)
             state["cap"] = None
             self.app.keymap = dict(KEYMAP_DEFAULT)
             for a, b in btns.items():
@@ -1601,13 +1624,13 @@ class Editor:
             self.refresh_keypad()
 
         def close_dlg():
-            set_capture(None)
+            set_capture(False)
             self.app.cfg["keymap"] = dict(self.app.keymap)
             save_settings(self.app.cfg)
             self.refresh_keypad()
             dlg.destroy()
 
-        dlg.bind("<Destroy>", lambda e: set_capture(None))
+        dlg.bind("<Destroy>", lambda e: set_capture(False))
 
         row = tk.Frame(dlg, bg=C_BG)
         row.pack(fill="x", padx=int(10 * sc), pady=int(8 * sc))
