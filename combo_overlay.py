@@ -930,11 +930,20 @@ class App:
         except Exception:
             pass
 
+    def _fg_title(self):
+        try:
+            hwnd = user32.GetForegroundWindow()
+            buf = ctypes.create_unicode_buffer(64)
+            user32.GetWindowTextW(hwnd, buf, 64)
+            return (buf.value or "")[:20]
+        except Exception:
+            return "?"
+
     def handle(self, kind, val, extra=0, pos=None):
-        self._log("IN %s %s dur=%d paused=%s editor=%s expect=%s" % (
+        self._log("IN %s %s dur=%d paused=%s editor=%s expect=%s fg=%s" % (
             kind, val, extra, self.paused,
             bool(self.editor and self.editor.alive),
-            self.seq[0][1] if self.seq else None))
+            self.seq[0][1] if self.seq else None, self._fg_title()))
         if self.paused or (self.editor and self.editor.alive):
             return
         if not self.seq:
