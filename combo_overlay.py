@@ -1595,10 +1595,20 @@ class Editor:
 
     def clear_axis(self):
         axis = "start" if self.axis_var.get() == "启动轴" else "loop"
-        self.axes[axis] = []
-        self.commit()
-        self.refresh_axes()
-        self.app.apply_team()
+        aname = "启动轴" if axis == "start" else "循环轴"
+        n = len(self.axes[axis])
+        if n == 0:
+            return
+
+        def do_clear():
+            self.axes[axis] = []
+            self.commit()
+            self.refresh_axes()
+            self.app.apply_team()
+
+        self._confirm("清空" + aname,
+                      "确定要清空【%s】的 %d 个节点吗？" % (aname, n),
+                      "确定清空", do_clear)
 
     # --- 分享 / 导入 ---
     def share_team(self):
@@ -1689,6 +1699,35 @@ class Editor:
                   font=("Microsoft YaHei", int(9 * sc)), padx=int(8 * sc),
                   cursor="hand2").pack(side="right")
         return dlg
+
+    def _confirm(self, title, text, ok_text, on_ok):
+        """深色确认框（不用系统 messagebox，避免白框和风格割裂）。"""
+        sc = self.app.scale
+        w, h = int(420 * sc), int(190 * sc)
+        dlg = self._dialog(title, w, h)
+        tk.Label(dlg, text=text, bg=C_BG, fg=C_TEXT, justify="left",
+                 font=("Microsoft YaHei", max(9, int(10 * sc))),
+                 wraplength=int(380 * sc)).pack(
+            fill="both", expand=True, padx=int(14 * sc), pady=int(10 * sc))
+
+        row = tk.Frame(dlg, bg=C_BG)
+        row.pack(fill="x", padx=int(12 * sc), pady=(0, int(10 * sc)))
+
+        def ok():
+            dlg.destroy()
+            on_ok()
+
+        tk.Button(row, text="取消", command=dlg.destroy, bd=0, bg=C_BAR, fg=C_TEXT,
+                  font=("Microsoft YaHei", max(9, int(9 * sc))), padx=int(14 * sc),
+                  pady=int(2 * sc), cursor="hand2").pack(side="right",
+                                                         padx=(int(6 * sc), 0))
+        tk.Button(row, text=ok_text, command=ok, bd=0, bg="#b91c1c", fg="#ffffff",
+                  activebackground="#991b1b", activeforeground="#ffffff",
+                  font=("Microsoft YaHei", max(9, int(9 * sc)), "bold"),
+                  padx=int(14 * sc), pady=int(2 * sc),
+                  cursor="hand2").pack(side="right")
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.focus_set()
 
     # --- 键位 ---
     def key_button_text(self, k):
