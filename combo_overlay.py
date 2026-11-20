@@ -257,6 +257,7 @@ class RAWINPUT(ctypes.Structure):
 
 def _raw_thread():
     """独立线程：注册 Raw Input，收 WM_INPUT → 转成 events 队列。"""
+    _rawlog("RAW-THREAD start")
     k32, u32 = kernel32, user32
     WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT,
                                  wintypes.WPARAM, wintypes.LPARAM)
@@ -288,6 +289,7 @@ def _raw_thread():
                 if raw.header.dwType == 1:      # keyboard
                     vk = int(raw.keyboard.VKey)
                     up = bool(raw.keyboard.Flags & RI_KEY_BREAK)
+                    _rawlog("RAW-KEY vk=%d %s" % (vk, "UP" if up else "DOWN"))
                     if vk and not up:
                         downs[vk] = time.time()
                     elif vk:
@@ -297,6 +299,8 @@ def _raw_thread():
                             events.put(("key", vk, dur, None))
                 elif raw.header.dwType == 0:    # mouse
                     flags = int(raw.mouse.ulButtons) & 0xFFFF
+                    if flags:
+                        _rawlog("RAW-MOUSE flags=0x%04X" % flags)
                     for bit, name, is_down in RI_MOUSE_BUTTON_FLAGS:
                         if flags & bit:
                             pt = wintypes.POINT()
@@ -358,9 +362,32 @@ def _raw_thread():
 
 
 _raw_ok = {"ok": None}
+_raw_log_path = {"p": None}
 
 
-def start_raw_input():
+def _rawlog(msg):
+    p = _raw_log_path["p"]
+    if not p:
+        return
+    try:
+        with open(p, "a", encoding="utf-8") as fp:
+            fp.write("%s %s fg=%s\n" % (time.strftime("%H:%M:%S"), msg, _fg_title_safe()))
+    except Exception:
+        pass
+
+
+def _fg_title_safe():
+    try:
+        hwnd = user32.GetForegroundWindow()
+        buf = ctypes.create_unicode_buffer(64)
+        user32.GetWindowTextW(hwnd, buf, 64)
+        return (buf.value or "")[:20]
+    except Exception:
+        return "?"
+
+
+def start_raw_input(log_path=None):
+    _raw_log_path["p"] = log_path
     threading.Thread(target=_raw_thread, daemon=True).start()
     for _ in range(50):
         if _raw_ok["ok"] is not None:
@@ -2295,7 +2322,7 @@ def main():
     if mode == "hooks":
         install_hooks()
         app._log("INPUT mode=hooks")
-    elif start_raw_input():
+    elif start_raw_input(app.debug_path):
         app.start_poll()             # 轮询只用于「键位」对话框的按键捕获
         app._log("INPUT mode=raw（Raw Input，判定走这条）")
     else:
