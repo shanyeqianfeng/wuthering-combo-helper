@@ -1620,14 +1620,49 @@ class Editor:
                 return chr(vk - 0x60 + 0x30)
             return None
 
+        # 校验提示行
+        hint = tk.Label(dlg, text="", bg=C_BG, fg=C_RED,
+                        font=("Microsoft YaHei", max(7, int(8 * sc))), anchor="w")
+        hint.pack(fill="x", padx=int(10 * sc))
+
+        FIXED_KEYS = ("1", "2", "3")   # 切人键，不允许被占用
+        HOLD_LEFT = "LMB"              # 普攻/重击用的左键（允许，但会提示）
+
+        def check_conflict(act, lab):
+            for a, phys in self.app.keymap.items():
+                if a != act and phys == lab:
+                    return "「%s」已经被「%s」占用" % (phys_display(lab), KEYMAP_LABEL[a])
+            if lab in FIXED_KEYS:
+                return "「%s」是切人键，不能占用" % lab
+            return None
+
+        def warn(text):
+            hint.configure(text=text, fg=C_RED)
+            hint.after(2600, lambda: hint.configure(text=""))
+
+        # 打开时先检查一遍现有键位有没有重复
+        seen = {}
+        for a, phys in self.app.keymap.items():
+            seen.setdefault(phys, []).append(a)
+        dups = [phys_display(p) + "：" + "/".join(KEYMAP_LABEL[x] for x in acts)
+                for p, acts in seen.items() if len(acts) > 1]
+        if dups:
+            hint.configure(text="⚠ 键位重复：" + "，".join(dups))
+
         def finish(act, lab):
             state["cap"] = None
             set_capture(False)
             if lab:
-                self.app.keymap[act] = lab
+                err = check_conflict(act, lab)
+                if err:
+                    warn("⚠ " + err + "，未修改")
+                else:
+                    self.app.keymap[act] = lab
+                    if lab == HOLD_LEFT:
+                        warn("⚠ 左键同时是普攻/重击，按当前步骤判定")
             for a, b in btns.items():
                 b.configure(text=phys_display(self.app.keymap.get(a, KEYMAP_DEFAULT[a])), bg=C_BAR)
-            # 立刻同步：键盘按钮 / 键位速查 / 两条轴 / 主窗口
+            # 立刻同步：键盘按钮 / 两条轴 / 主窗口
             self.refresh_keypad()
 
         def start_capture(act):
@@ -1665,6 +1700,7 @@ class Editor:
         def reset_default():
             set_capture(False)
             state["cap"] = None
+            hint.configure(text="")
             self.app.keymap = dict(KEYMAP_DEFAULT)
             for a, b in btns.items():
                 b.configure(text=phys_display(KEYMAP_DEFAULT[a]), bg=C_BAR)
