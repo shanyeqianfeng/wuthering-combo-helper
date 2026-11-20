@@ -1040,7 +1040,7 @@ class Editor:
         self.win = tk.Toplevel(app.root)
         self.win.overrideredirect(True)          # 去掉系统白色标题栏
         self.win.configure(bg=C_BG)
-        ww, wh = int(720 * sc), int(770 * sc)   # 两条轴各三排，不滚动
+        ww, wh = int(720 * sc), int(800 * sc)   # 两条轴各三排 + 预览独立一行
         sx = max(0, (self.win.winfo_screenwidth() - ww) // 2)
         sy = max(0, (self.win.winfo_screenheight() - wh) // 2 - int(60 * sc))
         self.win.geometry(f"{ww}x{wh}+{sx}+{sy}")
@@ -1202,15 +1202,26 @@ class Editor:
                                cursor="hand2", command=self.update_preview)
             self.mod_btns[opt] = b
 
-        # 底部
+        # 底部：第一行预览文字，第二行按钮
         bottom = tk.Frame(self.win, bg=C_BG)
-        bottom.pack(fill="x", padx=int(10 * sc), pady=(int(8 * sc), int(10 * sc)))
+        bottom.pack(fill="x", padx=int(10 * sc), pady=(int(6 * sc), 0))
         self.preview = tk.Label(bottom, text="先选一个键", bg=C_BG, fg=C_DIM,
-                                font=("Microsoft YaHei", int(10 * sc)))
-        self.preview.pack(side="left")
+                                font=("Microsoft YaHei", int(10 * sc)),
+                                anchor="w", justify="left",
+                                wraplength=int(680 * sc))
+        self.preview.pack(fill="x")
+
+        btnrow = tk.Frame(self.win, bg=C_BG)
+        btnrow.pack(fill="x", padx=int(10 * sc), pady=(int(4 * sc), int(8 * sc)))
+        self.cancel_ins_btn = tk.Button(btnrow, text="取消插入", command=self.cancel_insert,
+                                        bd=0, bg="#7f1d1d", fg="#ffffff",
+                                        activebackground="#991b1b", activeforeground="#fff",
+                                        font=("Microsoft YaHei", fs), padx=int(10 * sc),
+                                        cursor="hand2")
+        self.cancel_ins_btn.pack(side="left")
         for text, cmd in (("确认添加", self.add_move), ("撤销", self.undo_move),
                           ("清空", self.clear_axis), ("关闭", self.close)):
-            tk.Button(bottom, text=text, command=cmd, bd=0,
+            tk.Button(btnrow, text=text, command=cmd, bd=0,
                       bg=(C_ACCENT if text == "确认添加" else C_BAR),
                       fg="#fff" if text == "确认添加" else C_TEXT,
                       activebackground="#1d4ed8", activeforeground="#fff",
@@ -1347,9 +1358,31 @@ class Editor:
                                     outline="#2a3240", tags=(tag,))
                 paint_slot_text(cv, x, y, size, sc, disp, key, label,
                                 "#c9d3e0", "#7a8598", compact=True, tag=tag)
-                cv.tag_bind(tag, "<Button-1>",
-                            lambda e, a=axis, i=idx: self.node_menu(e, a, i))
+                # 最后一个节点不可点（没有「在后面插入」的意义，也不允许删尾）
+                if idx < len(items) - 1:
+                    cv.tag_bind(tag, "<Button-1>",
+                                lambda e, a=axis, i=idx: self.node_menu(e, a, i))
+                    cv.tag_bind(tag, "<Enter>",
+                                lambda e, c=cv: c.configure(cursor="hand2"))
+                    cv.tag_bind(tag, "<Leave>",
+                                lambda e, c=cv: c.configure(cursor=""))
+                else:
+                    cv.tag_bind(tag, "<Enter>",
+                                lambda e, c=cv: c.configure(cursor=""))
             cv.configure(scrollregion=(0, 0, wpx, pad + rows * rowh + pad))
+
+    def cancel_insert(self):
+        self.insert_pos = None
+        self.update_preview()
+
+    def _sync_insert_btn(self):
+        btn = getattr(self, "cancel_ins_btn", None)
+        if btn is None:
+            return
+        if getattr(self, "insert_pos", None):
+            btn.configure(state="normal", bg="#7f1d1d", fg="#ffffff")
+        else:
+            btn.configure(state="disabled", bg=C_BAR, fg=C_DIM)
 
     def new_team(self):
         name = simpledialog.askstring("新建方案", "方案名称：", parent=self.win)
@@ -1443,6 +1476,7 @@ class Editor:
         return None
 
     def update_preview(self):
+        self._sync_insert_btn()
         k = self.sel_key
         if not k:
             self.preview.configure(text="先选一个键", fg=C_DIM)
@@ -1459,6 +1493,7 @@ class Editor:
             txt = f"将在【{aname}】第 {p} 个之后插入：{item[0]}"
         else:
             txt = f"将载入【{self.axis_var.get()}】：{item[0]}"
+        self._sync_insert_btn()
         if top:
             txt += f"  {top}"
         if bottom:
