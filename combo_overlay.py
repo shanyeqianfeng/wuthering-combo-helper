@@ -268,7 +268,7 @@ KEY_NAMES = {"A": "普攻", "Z": "重击", "E": "共鸣技能", "Q": "声骸技�
              "SPACE": "跳跃", "SHIFT": "闪避"}
 SKILL_NAME = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放"}
 LONG_MARKS = ("·长", "长按", "长", "+")
-SWITCH_STATES = (("变奏", "变奏"), ("变", "变奏"), ("合奏", "合奏"), ("合轴", "合轴"), ("合", "合轴"))
+SWITCH_STATES = (("首发", "首发"), ("变奏", "变奏"), ("变", "变奏"), ("合奏", "合奏"), ("合轴", "合轴"), ("合", "合轴"))
 # 这些键只判定按没按，不区分长短按
 NO_HOLD_KEYS = {"SPACE", "SHIFT", "1", "2", "3", "RMB", "RMB_HOLD", "MMB", "MMB_HOLD"}
 
@@ -383,7 +383,7 @@ def item_token(item):
         return "跳跃"
     if key == "SHIFT":
         return "闪避"
-    if key in ("1", "2", "3") and label in ("变奏", "合轴", "合奏"):
+    if key in ("1", "2", "3") and label in ("变奏", "合轴", "合奏", "首发"):
         return key + label
     if key in ("1", "2", "3"):
         return key + "变奏"
@@ -432,6 +432,7 @@ BYTE_TO_TOKEN = {
     0x14: "共鸣解放", 0x15: "共鸣解放长",
     0x20: "1变奏", 0x21: "1合轴", 0x22: "2变奏", 0x23: "2合轴",
     0x24: "3变奏", 0x25: "3合轴",
+    0x26: "1首发", 0x27: "2首发", 0x28: "3首发",
     0x30: "跳跃", 0x31: "右键", 0x32: "中键", 0x33: "闪避",
 }
 
@@ -447,7 +448,7 @@ def item_byte(item):
     disp, key, label = item
     if key in SWITCH_BASE:
         base = SWITCH_BASE[key]
-        return base if (label or "变奏") in ("变奏",) else base + 1
+        return base + {"变奏": 0, "合轴": 1, "合奏": 1, "首发": 2}.get(label or "变奏", 0)
     return KEY_TO_BYTE.get(key)
 
 
@@ -1189,12 +1190,12 @@ class Editor:
         self.mod_frame = tk.Frame(self.win, bg=C_BG)
         self.mod_frame.pack(fill="x", padx=int(10 * sc), pady=(int(6 * sc), 0))
         self.mod_hint = tk.Label(self.mod_frame,
-                                 text="选 E/Q/R 再选 短按或长按 ；选 1/2/3 再选 变奏或合轴",
+                                 text="选 E/Q/R 再选 短按或长按 ；选 1/2/3 再选 变奏/合轴/首发",
                                  bg=C_BG, fg=C_DIM, font=("Microsoft YaHei", fs))
         self.mod_hint.pack(side="left")
         self.mod_var = tk.StringVar(value="")
         self.mod_btns = {}
-        for opt in ("短按", "长按", "变奏", "合轴"):
+        for opt in ("短按", "长按", "变奏", "合轴", "首发"):
             b = tk.Radiobutton(self.mod_frame, text=opt, value=opt, variable=self.mod_var,
                                indicatoron=0, bd=0, bg=C_BAR, fg=C_TEXT,
                                selectcolor="#1d4ed8", activebackground="#1f2937",
@@ -1454,7 +1455,8 @@ class Editor:
         elif k in ("1", "2", "3"):
             self.mod_var.set("变奏")
             self.mod_btns["变奏"].pack(side="left", padx=(0, int(4 * self.app.scale)))
-            self.mod_btns["合轴"].pack(side="left")
+            self.mod_btns["合轴"].pack(side="left", padx=(0, int(4 * self.app.scale)))
+            self.mod_btns["首发"].pack(side="left")
         else:
             self.mod_var.set("")
         self.update_preview()
@@ -1509,8 +1511,15 @@ class Editor:
         item = parse_token(tok)
         ins = getattr(self, "insert_pos", None)
         if ins:
-            i_axis, i_pos = ins
-            self.axes[i_axis].insert(min(i_pos, len(self.axes[i_axis])), item)
+            t_axis, t_pos = ins[0], min(ins[1], len(self.axes[ins[0]]))
+        else:
+            t_axis, t_pos = axis, len(self.axes[axis])
+        # 首发只能在启动轴第一个
+        if item[2] == "首发" and not (t_axis == "start" and t_pos == 0):
+            self.preview.configure(text="首发只能放在【启动轴】的第一个", fg=C_RED)
+            return
+        if ins:
+            self.axes[t_axis].insert(t_pos, item)
             self.insert_pos = None
         else:
             self.axes[axis].append(item)
@@ -1547,7 +1556,12 @@ class Editor:
             close()
             self.begin_insert(axis, idx)
 
-        for text, cmd, color in (("删除这一个", do_delete, "#7f1d1d"),
+        def do_modify():
+            close()
+            self.modify_node(axis, idx, ev)
+
+        for text, cmd, color in (("修改这个节点", do_modify, None),
+                                 ("删除这一个", do_delete, "#7f1d1d"),
                                  ("在后面插入", do_insert, None),
                                  ("取消", close, None)):
             tk.Button(pop, text=text, command=cmd, bd=0, relief="flat",
@@ -1557,6 +1571,61 @@ class Editor:
                       padx=int(16 * sc), pady=int(3 * sc),
                       cursor="hand2").pack(fill="x", padx=int(4 * sc), pady=int(2 * sc))
 
+        pop.bind("<FocusOut>", lambda e: self.close_node_popup())
+        pop.focus_set()
+
+    def modify_node(self, axis, idx, ev=None):
+        """修改节点：技能换长短按，切人换 变奏/合轴/首发。"""
+        if idx >= len(self.axes[axis]):
+            return
+        item = self.axes[axis][idx]
+        disp, key, label = item
+        if key in ("E", "Q", "R", "E_HOLD", "Q_HOLD", "R_HOLD"):
+            base = SKILL_NAME[key[0]]
+            opts = [("短按", base), ("长按", base + "长")]
+        elif key in ("1", "2", "3"):
+            opts = [(key + "变奏", key + "变奏"), (key + "合轴", key + "合轴")]
+            if axis == "start" and idx == 0:
+                opts.insert(0, (key + "首发", key + "首发"))
+        else:
+            self.preview.configure(text="这个节点没有可修改的选项", fg=C_RED)
+            return
+
+        self.close_node_popup()
+        sc = self.app.scale
+        pop = tk.Toplevel(self.win)
+        pop.overrideredirect(True)
+        pop.configure(bg=C_PANEL)
+        pop.attributes("-topmost", True)
+        if ev is not None:
+            pop.geometry("+%d+%d" % (ev.x_root, ev.y_root))
+        self._node_popup = pop
+
+        tk.Label(pop, text="改成：", bg=C_PANEL, fg=C_DIM,
+                 font=("Microsoft YaHei", max(7, int(8 * sc)))).pack(
+            fill="x", padx=int(10 * sc), pady=(int(5 * sc), int(2 * sc)))
+
+        def pick(tok):
+            self.close_node_popup()
+            new_item = parse_token(tok)
+            if not new_item:
+                return
+            self.axes[axis][idx] = new_item
+            self.commit()
+            self.refresh_axes()
+            self.app.apply_team()
+
+        for text, tok in opts:
+            tk.Button(pop, text=text, command=lambda t=tok: pick(t), bd=0, relief="flat",
+                      bg=C_BAR, fg=C_TEXT, activebackground=C_ACCENT,
+                      activeforeground="#ffffff",
+                      font=("Microsoft YaHei", max(9, int(9 * sc))),
+                      padx=int(16 * sc), pady=int(3 * sc),
+                      cursor="hand2").pack(fill="x", padx=int(4 * sc), pady=int(2 * sc))
+        tk.Button(pop, text="取消", command=self.close_node_popup, bd=0, relief="flat",
+                  bg=C_BAR, fg=C_DIM, font=("Microsoft YaHei", max(9, int(9 * sc))),
+                  padx=int(16 * sc), pady=int(3 * sc),
+                  cursor="hand2").pack(fill="x", padx=int(4 * sc), pady=int(2 * sc))
         pop.bind("<FocusOut>", lambda e: self.close_node_popup())
         pop.focus_set()
 
