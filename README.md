@@ -8,6 +8,21 @@
 
 ---
 
+## 下载（免安装）
+
+不想装 Python？直接去 [Releases](https://github.com/shanyeqianfeng/wuthering-combo-helper/releases) 下载：
+
+```
+wuthering-combo-helper-v1.0.0-win64.zip   ≈ 11 MB
+```
+
+解压后双击 `鸣潮连招助手.exe` 即可，**不需要 Python、不需要任何依赖**（内置运行时）。
+数据保存在 exe 旁的 `方案` 文件夹里。
+
+> 首次运行 Windows 可能提示「未知发布者」（未做代码签名），点「更多信息 → 仍要运行」即可。
+
+---
+
 ## 它解决什么问题
 
 练习输出循环时最难受的是「记得顺序但经常按错一个键」，然后整条循环就断了。
