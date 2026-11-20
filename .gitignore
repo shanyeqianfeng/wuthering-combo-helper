@@ -1,0 +1,8 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+teams.json
+teams.json.bak
+settings.json
+*.exe
+*.lnk
