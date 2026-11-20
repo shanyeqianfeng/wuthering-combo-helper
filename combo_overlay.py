@@ -176,11 +176,9 @@ def enable_dpi():
 
 # ---------------- 连招解析 ----------------
 IGNORE_VK = {0x11, 0x12, 0x14, 0x5B, 0x5C, 0x09, 0xA2, 0xA3, 0xA4, 0xA5, 0xFF}
-ALIAS = {"A": "LMB", "左键": "LMB", "普攻": "LMB", "Z": "LMB_HOLD", "重击": "LMB_HOLD",
-         "右键": "RMB", "RMB": "RMB", "中键": "MMB", "MMB": "MMB",
-         "空格": "SPACE", "空格键": "SPACE", "SPACE": "SPACE", "跳跃": "SPACE",
-         "闪避": "SHIFT", "闪": "SHIFT", "SHIFT": "SHIFT", "SHIFT键": "SHIFT",
-         "共鸣技能": "E", "声骸技能": "Q", "共鸣解放": "R"}
+ALIAS = {"普攻": "LMB", "重击": "LMB_HOLD",
+         "共鸣技能": "E", "声骸技能": "Q", "共鸣解放": "R",
+         "跳跃": "SPACE", "闪避": "SHIFT"}
 
 # 可自定义的键位（动作 → 物理键）；方案里只存动作名，物理键本地保存
 KEYMAP_DEFAULT = {"E": "E", "Q": "Q", "R": "R", "SPACE": "SPACE", "SHIFT": "SHIFT"}
@@ -218,14 +216,18 @@ def vk_label(vk):
 
 
 def norm_key(text):
+    """只认动作名（和 1/2/3 切人位），不再兼容 A/Z/E/Q/R 这类旧写法。"""
     t = text.strip()
     if not t:
         return ""
     if t in ALIAS:
         return ALIAS[t]
-    if t.upper() in ALIAS:
-        return ALIAS[t.upper()]
-    return t.upper()
+    tu = t.upper()
+    if tu in ALIAS:
+        return ALIAS[tu]
+    if tu in ("1", "2", "3"):
+        return tu
+    return ""
 
 
 DISP_DEFAULT = {"LMB": "A", "LMB_HOLD": "Z", "E": "E", "E_HOLD": "E",
@@ -1320,15 +1322,15 @@ class Editor:
     def build_token(self):
         k = self.sel_key
         if k == "A":
-            return "A"
+            return "普攻"
         if k == "Z":
-            return "Z"
+            return "重击"
         if k == "SPACE":
-            return "SPACE"
+            return "跳跃"
         if k == "SHIFT":
-            return "SHIFT"
+            return "闪避"
         if k in ("E", "Q", "R"):
-            return k + ("长" if self.mod_var.get() == "长按" else "")
+            return SKILL_NAME[k] + ("长" if self.mod_var.get() == "长按" else "")
         if k in ("1", "2", "3"):
             return k + (self.mod_var.get() or "变奏")
         return None
