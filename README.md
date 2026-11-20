@@ -91,7 +91,7 @@ python combo_overlay.py
 仓库里附带了 `launcher.cs`，可以用 Windows 自带的编译器做一个 6KB 的启动器 exe：
 
 ```bash
-csc /target:winexe /out:鸣潮连招助手.exe /r:System.Windows.Forms.dll launcher.cs
+csc /target:winexe /win32icon:assets/icon.ico /out:鸣潮连招助手.exe /r:System.Windows.Forms.dll launcher.cs
 ```
 
 目录结构：
@@ -214,6 +214,9 @@ csc /target:winexe /out:鸣潮连招助手.exe /r:System.Windows.Forms.dll launc
 ├─ docs/
 │   ├─ main.png         主界面截图
 │   └─ editor.png       编辑器截图
+├─ assets/
+│   ├─ icon.ico         程序图标
+│   └─ icon.png
 ├─ examples/
 │   └─ teams.example.json
 ├─ README.md
