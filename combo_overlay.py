@@ -137,16 +137,46 @@ def _keyboard_proc(nCode, wParam, lParam):
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
 
+WM_XBUTTONDOWN = 0x020B
+WM_XBUTTONUP = 0x020C
+MOUSE_BTN = {WM_LBUTTONDOWN: "LMB", WM_RBUTTONDOWN: "RMB", WM_MBUTTONDOWN: "MMB"}
+MOUSE_UP = {WM_LBUTTONUP: "LMB", WM_RBUTTONUP: "RMB", WM_MBUTTONUP: "MMB"}
+
+
+def _xbutton_name(ms):
+    hi = (int(ms.mouseData) >> 16) & 0xFFFF
+    return "X1" if hi == 1 else ("X2" if hi == 2 else None)   # X1=后退, X2=前进
+
+
 def _mouse_proc(nCode, wParam, lParam):
     if nCode == 0:
-        if wParam in (WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN):
+        ms = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+        if _capture["on"]:
+            name = None
+            if wParam in MOUSE_BTN:
+                name = MOUSE_BTN[wParam]
+            elif wParam == WM_XBUTTONDOWN:
+                name = _xbutton_name(ms)
+            if name:
+                _cap_queue.put(name)
+            return 1          # 捕获期间吞掉鼠标键
+        if wParam in MOUSE_BTN:
             _down_mouse[wParam] = time.time()
-        elif wParam in (WM_LBUTTONUP, WM_RBUTTONUP, WM_MBUTTONUP):
-            base = {WM_LBUTTONUP: "LMB", WM_RBUTTONUP: "RMB", WM_MBUTTONUP: "MMB"}[wParam]
+        elif wParam in MOUSE_UP:
+            base = MOUSE_UP[wParam]
             start = _down_mouse.pop(wParam - 1, None)
             dur = (time.time() - start) * 1000.0 if start else 0.0
-            ms = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
             events.put(("mouse", base, dur, (int(ms.pt.x), int(ms.pt.y))))
+        elif wParam == WM_XBUTTONDOWN:
+            nm = _xbutton_name(ms)
+            if nm:
+                _down_mouse[("X", nm)] = time.time()
+        elif wParam == WM_XBUTTONUP:
+            nm = _xbutton_name(ms)
+            if nm:
+                start = _down_mouse.pop(("X", nm), None)
+                dur = (time.time() - start) * 1000.0 if start else 0.0
+                events.put(("mouse", nm, dur, (int(ms.pt.x), int(ms.pt.y))))
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
 
@@ -209,6 +239,28 @@ ALIAS = {"普攻": "LMB", "重击": "LMB_HOLD",
 KEYMAP_DEFAULT = {"E": "E", "Q": "Q", "R": "R", "SPACE": "SPACE", "SHIFT": "SHIFT"}
 KEYMAP_LABEL = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放",
                 "SPACE": "跳跃", "SHIFT": "闪避"}
+
+MOUSE_DISPLAY = {"LMB": "鼠标左键", "RMB": "鼠标右键", "MMB": "鼠标中键",
+                 "X1": "鼠标后退", "X2": "鼠标前进"}
+PHYS_SHORT = {"LMB": "左键", "RMB": "右键", "MMB": "中键", "X1": "后退", "X2": "前进"}
+
+
+def phys_display(phys):
+    if phys in MOUSE_DISPLAY:
+        return MOUSE_DISPLAY[phys]
+    if phys == "SPACE":
+        return "空格"
+    if phys == "SHIFT":
+        return "Shift"
+    return phys
+
+
+def phys_short(phys):
+    if phys in PHYS_SHORT:
+        return PHYS_SHORT[phys]
+    if phys == "SPACE":
+        return "空格"
+    return phys
 
 # 编辑器键盘上方那一排小字（按键 → 含义）
 KEY_NAMES = {"A": "普攻", "Z": "重击", "E": "共鸣技能", "Q": "声骸技能",
@@ -752,7 +804,7 @@ class App:
                 continue
             disp, key, label = item
             if key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
-                disp = self.keymap.get(key[0], key[0])
+                disp = phys_short(self.keymap.get(key[0], key[0]))
             if key in ("1", "2", "3"):
                 nm = (names.get(key) or "").strip()
                 if nm:
@@ -799,43 +851,45 @@ class App:
                 pass
         return False
 
-    def resolve_input(self, label, dur):
-        """物理输入 → 动作（按本地键位表翻译），再按阈值补长按后缀。
-
-        未绑定的键返回 None（忽略，避免和字母同名动作混淆）。
-        """
-        rev = {phys: act for act, phys in self.keymap.items()}
-        for fixed in ("LMB", "LMB_HOLD", "RMB", "MMB", "1", "2", "3"):
-            rev.setdefault(fixed, fixed)
-        act = rev.get(label)
-        if act is None:
-            return None
-        holdable = act in ("E", "Q", "R")
-        if holdable and dur >= self.hold_ms:
-            act += "_HOLD"
-        return act
+    def expected_phys(self):
+        """当前这一步要求的物理键 + 是否要长按（None=不区分长短）。"""
+        if not self.seq:
+            return None, None
+        key = self.seq[0][1]
+        if key in ("LMB", "LMB_HOLD"):
+            return "LMB", key.endswith("_HOLD")
+        if key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
+            return self.keymap.get(key[0], key[0]), key.endswith("_HOLD")
+        if key in ("SPACE", "SHIFT"):
+            return self.keymap.get(key, key), None
+        if key in ("1", "2", "3"):
+            return key, None
+        return None, None
 
     def handle(self, kind, val, extra=0, pos=None):
         if self.paused or (self.editor and self.editor.alive):
             return
+        if not self.seq:
+            return
         if kind == "mouse":
             if self._in_ui(pos):
                 return
-            label = val + ("_HOLD" if extra >= self.hold_ms and val not in NO_HOLD_KEYS else "")
-            act = label
+            phys, hold = val, extra >= self.hold_ms
         else:
-            base = vk_label(val)
-            if not base:
+            phys = vk_label(val)
+            if not phys:
                 return
-            act = self.resolve_input(base, extra)
-            if act is None:
-                return
-        if not self.seq:
+            hold = extra >= self.hold_ms
+        want, want_hold = self.expected_phys()
+        if want is None:
             return
-        if act == self.seq[0][1]:
-            self.on_correct()
-        else:
+        if phys != want:
             self.on_wrong()
+            return
+        if want_hold is not None and hold != want_hold:
+            self.on_wrong()
+            return
+        self.on_correct()
 
     def on_correct(self):
         if self.busy:
@@ -1276,7 +1330,7 @@ class Editor:
                     if nm:
                         disp = nm[0]  # 小方框只显示首字，避免出圈
                 elif key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
-                    disp = self.app.keymap.get(key[0], key[0])
+                    disp = phys_short(self.app.keymap.get(key[0], key[0]))
                 cv.create_rectangle(x, y, x + size, y + size, fill="#151a23",
                                     outline="#2a3240")
                 paint_slot_text(cv, x, y, size, sc, disp, key, label,
@@ -1512,11 +1566,11 @@ class Editor:
     # --- 键位 ---
     def key_button_text(self, k):
         if k == "SPACE":
-            return "空格"
+            return phys_short(self.app.keymap.get("SPACE", "SPACE"))
         if k == "SHIFT":
-            return "Shift"
+            return phys_short(self.app.keymap.get("SHIFT", "SHIFT"))
         if k in ("E", "Q", "R"):
-            return self.app.keymap.get(k, k)
+            return phys_short(self.app.keymap.get(k, k))
         return k
 
     def refresh_keypad(self):
@@ -1544,7 +1598,7 @@ class Editor:
                      font=("Microsoft YaHei", fs), anchor="w", width=8).grid(
                 row=("E", "Q", "R", "SPACE", "SHIFT").index(act), column=0,
                 sticky="w", pady=int(3 * sc))
-            b = tk.Button(rows, text=self.app.keymap.get(act, KEYMAP_DEFAULT[act]),
+            b = tk.Button(rows, text=phys_display(self.app.keymap.get(act, KEYMAP_DEFAULT[act])),
                           bd=0, bg=C_BAR, fg=C_GREEN, cursor="hand2",
                           font=("Microsoft YaHei", fs, "bold"), padx=int(10 * sc))
             b.grid(row=("E", "Q", "R", "SPACE", "SHIFT").index(act), column=1,
@@ -1572,14 +1626,14 @@ class Editor:
             if lab:
                 self.app.keymap[act] = lab
             for a, b in btns.items():
-                b.configure(text=self.app.keymap.get(a, KEYMAP_DEFAULT[a]), bg=C_BAR)
+                b.configure(text=phys_display(self.app.keymap.get(a, KEYMAP_DEFAULT[a])), bg=C_BAR)
             # 立刻同步：键盘按钮 / 键位速查 / 两条轴 / 主窗口
             self.refresh_keypad()
 
         def start_capture(act):
             state["cap"] = act
             for a, b in btns.items():
-                b.configure(text="按任意键…" if a == act else self.app.keymap.get(a, KEYMAP_DEFAULT[a]),
+                b.configure(text="按任意键/鼠标…" if a == act else phys_display(self.app.keymap.get(a, KEYMAP_DEFAULT[a])),
                             bg=C_ACCENT if a == act else C_BAR)
             set_capture(True)
             deadline = time.time() + 6.0          # 6 秒没按键就自动取消，避免一直吞键
@@ -1588,15 +1642,18 @@ class Editor:
                 if not dlg.winfo_exists():
                     set_capture(False)
                     return
-                vk = take_captured()
-                if vk is not None:
-                    finish(act, None if vk == 0x1B else label_for_vk(vk))
+                got = take_captured()
+                if got is not None:
+                    if isinstance(got, str):
+                        finish(act, got)                     # 鼠标键
+                    else:
+                        finish(act, None if got == 0x1B else label_for_vk(got))
                     return
                 if time.time() > deadline or state["cap"] != act:
                     set_capture(False)
                     state["cap"] = None
                     for a, b in btns.items():
-                        b.configure(text=self.app.keymap.get(a, KEYMAP_DEFAULT[a]), bg=C_BAR)
+                        b.configure(text=phys_display(self.app.keymap.get(a, KEYMAP_DEFAULT[a])), bg=C_BAR)
                     return
                 dlg.after(50, poll)
 
@@ -1610,7 +1667,7 @@ class Editor:
             state["cap"] = None
             self.app.keymap = dict(KEYMAP_DEFAULT)
             for a, b in btns.items():
-                b.configure(text=KEYMAP_DEFAULT[a], bg=C_BAR)
+                b.configure(text=phys_display(KEYMAP_DEFAULT[a]), bg=C_BAR)
             self.refresh_keypad()
 
         def close_dlg():
