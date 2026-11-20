@@ -384,8 +384,13 @@ def decode_team(text):
         return None, "队伍码对不上，可能抄错了字符"
     if raw[:2] != CODE_MAGIC:
         return None, "不是本程序生成的方案码"
-    if len(raw) < 3 or raw[2] != CODE_VERSION:
-        return None, "方案码版本不支持"
+    if len(raw) < 3:
+        return None, "数据过短"
+    ver = raw[2]
+    if ver > CODE_VERSION:
+        return None, f"这个方案码来自更新的版本（v{ver}），更新程序后再导入"
+    if ver < 1:
+        return None, "方案码版本无效"
 
     pos = 3
     try:
@@ -403,7 +408,7 @@ def decode_team(text):
                 pos += 1
                 tok = BYTE_TO_TOKEN.get(b)
                 if tok is None:
-                    raise ValueError(f"未知招式编码 0x{b:02X}")
+                    raise ValueError(f"未知招式编码 0x{b:02X}（可能来自更新版本）")
                 toks.append(tok)
             axes[axis] = " ".join(toks)
     except (IndexError, ValueError) as exc:
