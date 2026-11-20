@@ -715,6 +715,9 @@ class App:
         y = self.cfg.get("y") if self.cfg.get("y") is not None else (
             sh - h - int(float(self.cfg["y_offset"]) * sc) - int(46 * sc))
         x, y = int(x), int(y)
+        # 防止上次的位置把窗口甩到屏幕外（换分辨率/缩放后常见）
+        x = max(0, min(x, sw - w))
+        y = max(0, min(y, sh - h - int(46 * sc)))
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.ctrl.geometry(f"{w}x{int(40 * sc)}+{x}+{y + h + int(4 * sc)}")
         self.canvas.configure(width=w, height=h)
