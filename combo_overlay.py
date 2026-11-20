@@ -333,9 +333,9 @@ def _raw_thread():
 
     u32.RegisterClassW(ctypes.byref(wcw))
 
-    HWND_MESSAGE = wintypes.HWND(-3)
-    hwnd = u32.CreateWindowExW(0, klass, "raw", 0, 0, 0, 0, 0,
-                               HWND_MESSAGE, None, hinst, None)
+    # 用普通（不可见）窗口而不是 message-only：后者收不到 WM_INPUT
+    hwnd = u32.CreateWindowExW(0, klass, "combo-raw", 0, 0, 0, 0, 0,
+                               0, None, hinst, None)
     if not hwnd:
         _raw_ok["err"] = "CreateWindowExW err=%d" % k32.GetLastError()
         _raw_ok["ok"] = False
