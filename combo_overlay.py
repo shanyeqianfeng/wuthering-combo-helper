@@ -1368,7 +1368,7 @@ class Editor:
                 tag = "n_%s_%d" % (axis, idx)
                 rad = max(5, int(0.18 * size))
                 editable = idx < len(items) - 1
-                border = "#e8edf5" if editable else "#000000"
+                border = "#e8edf5" if editable else "#4ade80"
                 # 磨砂底：深色圆角 + 细颗粒雾面 + 边框
                 _rrect(cv, x, y, x + size, y + size, rad,
                        fill="#171f2b", outline="", tags=(tag,))
@@ -1377,7 +1377,7 @@ class Editor:
                 _rrect(cv, x, y, x + size, y + size, rad,
                        fill="", outline=border, width=2, tags=(tag,))
                 paint_slot_text(cv, x, y, size, sc, disp, key, label,
-                                "#eef3fa" if editable else "#93a0b4",
+                                "#eef3fa" if editable else "#c8f7d8",
                                 "#93a3ba", compact=True, tag=tag)
                 # 最后一个节点不可点（没有「在后面插入」的意义，也不允许删尾）
                 if idx < len(items) - 1:
