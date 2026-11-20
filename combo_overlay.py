@@ -214,6 +214,35 @@ def force_topmost(hwnd):
         pass
 
 
+def is_admin():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def foreground_is_elevated(title_keys=("鸣潮", "Wuthering")):
+    """前台是不是打不开的游戏进程（同级能打开，提权的打不开）。"""
+    try:
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, buf, 256)
+        title = buf.value or ""
+        if not any(k in title for k in title_keys):
+            return False
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        h = kernel32.OpenProcess(0x1000, False, pid.value)
+        if h:
+            kernel32.CloseHandle(h)
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def enable_dpi():
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -635,6 +664,10 @@ class App:
         self.keymap = dict(KEYMAP_DEFAULT)
         self.keymap.update(cfg.get("keymap") or {})
         self.cfg["keymap"] = dict(self.keymap)
+        self.debug = bool(os.environ.get("COMBO_DEBUG"))
+        self.debug_path = os.path.join(DATA_DIR, "debug.log")
+        self.admin = is_admin()
+        self.need_admin = False
 
         self.teams = load_teams()
         self.mode = "start"
@@ -742,6 +775,15 @@ class App:
         return user32.GetParent(self.root.winfo_id())
 
     def _tick_topmost(self):
+        # 前台是提权游戏而我们没提权 → 收不到按键，提示一下
+        if not self.admin:
+            need = foreground_is_elevated()
+            if need != self.need_admin:
+                self.need_admin = need
+                try:
+                    self.redraw()
+                except Exception:
+                    pass
         # 编辑器/对话框开着的时候不要把主窗口顶到它们上面
         busy = bool(self.editor and self.editor.alive)
         if self.locked and not busy:
@@ -790,8 +832,11 @@ class App:
         pad, top = int(12 * sc), int(26 * sc)
         w, h = self._main_size()
 
+        head_txt = ("已暂停 · " if self.paused else "") + self.current_team()["name"]
+        if self.need_admin and not self.admin:
+            head_txt = "⚠ 需要管理员权限  " + head_txt
         c.create_text(int(14 * sc), int(12 * sc), anchor="w",
-                      text=("已暂停 · " if self.paused else "") + self.current_team()["name"],
+                      text=head_txt,
                       fill=C_DIM, font=("Microsoft YaHei", int(8 * sc)))
         tail = f"错 {self.mistakes}" + ("  ·  已锁定" if self.locked else "")
         c.create_text(w - int(14 * sc), int(12 * sc), anchor="e", text=tail,
@@ -871,6 +916,15 @@ class App:
         return None, None
 
     def handle(self, kind, val, extra=0, pos=None):
+        if self.debug:
+            try:
+                with open(self.debug_path, "a", encoding="utf-8") as fp:
+                    fp.write("%s %s %s dur=%d paused=%s editor=%s seq=%s\n" % (
+                        time.strftime("%H:%M:%S"), kind, val, extra,
+                        self.paused, bool(self.editor and self.editor.alive),
+                        self.seq[0][1] if self.seq else None))
+            except Exception:
+                pass
         if self.paused or (self.editor and self.editor.alive):
             return
         if not self.seq:
