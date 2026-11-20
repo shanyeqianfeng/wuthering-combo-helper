@@ -999,6 +999,17 @@ def _fit_font(canvas, text, max_w, size, bold=True, min_size=6):
         return ("Microsoft YaHei", size, "bold" if bold else "normal")
 
 
+def _rrect(c, x0, y0, x1, y1, r, **kw):
+    """圆角矩形（用平滑多边形模拟，Tk 画布没有原生圆角）。"""
+    r = max(2, min(r, (x1 - x0) // 2, (y1 - y0) // 2))
+    pts = [
+        x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+        x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+        x0, y1, x0, y1 - r, x0, y0 + r, x0, y0,
+    ]
+    return c.create_polygon(pts, smooth=True, splinesteps=12, **kw)
+
+
 def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False,
                     compact=False, tag=None):
     tags = (tag,) if tag else ()
@@ -1355,10 +1366,19 @@ class Editor:
                 elif key in ("E", "E_HOLD", "Q", "Q_HOLD", "R", "R_HOLD"):
                     disp = phys_short(self.app.keymap.get(key[0], key[0]))
                 tag = "n_%s_%d" % (axis, idx)
-                cv.create_rectangle(x, y, x + size, y + size, fill="#151a23",
-                                    outline="#2a3240", tags=(tag,))
+                rad = max(5, int(0.18 * size))
+                editable = idx < len(items) - 1
+                border = "#e8edf5" if editable else "#000000"
+                # 磨砂底：深色圆角 + 细颗粒雾面 + 边框
+                _rrect(cv, x, y, x + size, y + size, rad,
+                       fill="#171f2b", outline="", tags=(tag,))
+                _rrect(cv, x + 1, y + 1, x + size - 1, y + size - 1, rad - 1,
+                       fill="#33414f", stipple="gray12", outline="", tags=(tag,))
+                _rrect(cv, x, y, x + size, y + size, rad,
+                       fill="", outline=border, width=2, tags=(tag,))
                 paint_slot_text(cv, x, y, size, sc, disp, key, label,
-                                "#c9d3e0", "#7a8598", compact=True, tag=tag)
+                                "#eef3fa" if editable else "#93a0b4",
+                                "#93a3ba", compact=True, tag=tag)
                 # 最后一个节点不可点（没有「在后面插入」的意义，也不允许删尾）
                 if idx < len(items) - 1:
                     cv.tag_bind(tag, "<Button-1>",
