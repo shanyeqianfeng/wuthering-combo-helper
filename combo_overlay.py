@@ -175,18 +175,23 @@ def enable_dpi():
 
 
 # ---------------- 连招解析 ----------------
-IGNORE_VK = set(range(0x10, 0x13)) | {0x14, 0x5B, 0x5C, 0x09, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xFF}
+IGNORE_VK = {0x11, 0x12, 0x14, 0x5B, 0x5C, 0x09, 0xA2, 0xA3, 0xA4, 0xA5, 0xFF}
 ALIAS = {"A": "LMB", "左键": "LMB", "普攻": "LMB", "Z": "LMB_HOLD", "重击": "LMB_HOLD",
          "右键": "RMB", "RMB": "RMB", "中键": "MMB", "MMB": "MMB",
-         "空格": "SPACE", "空格键": "SPACE", "SPACE": "SPACE"}
+         "空格": "SPACE", "空格键": "SPACE", "SPACE": "SPACE",
+         "闪避": "SHIFT", "闪": "SHIFT", "SHIFT": "SHIFT", "SHIFT键": "SHIFT"}
 SKILL_NAME = {"E": "共鸣技能", "Q": "声骸技能", "R": "共鸣解放"}
 LONG_MARKS = ("·长", "长按", "长", "+")
 SWITCH_STATES = (("变奏", "变奏"), ("变", "变奏"), ("合奏", "合奏"), ("合轴", "合轴"), ("合", "合轴"))
+# 这些键只判定按没按，不区分长短按
+NO_HOLD_KEYS = {"SPACE", "SHIFT", "1", "2", "3", "RMB", "RMB_HOLD", "MMB", "MMB_HOLD"}
 
 
 def vk_label(vk):
     if vk in IGNORE_VK:
         return None
+    if vk in (0x10, 0xA0, 0xA1):      # 左右 Shift 都算闪避
+        return "SHIFT"
     if 0x41 <= vk <= 0x5A:
         return chr(vk)
     if 0x30 <= vk <= 0x39:
@@ -245,6 +250,8 @@ def parse_token(tok):
     disp = (disp_override.strip() if disp_override else raw) or raw
     if key == "SPACE" and not disp_override:
         disp = "空格"
+    if key == "SHIFT" and not disp_override:
+        disp = "闪避"
     if state:
         label = state
     elif key in ("1", "2", "3"):
@@ -293,7 +300,7 @@ def slot_texts(key, label):
         return SKILL_NAME[key], "短按"
     if key in ("E_HOLD", "Q_HOLD", "R_HOLD"):
         return SKILL_NAME[key[0]], "长按"
-    if key == "SPACE":
+    if key in ("SPACE", "SHIFT"):
         return None, None
     if key in ("1", "2", "3"):
         return None, label or "变奏"
@@ -313,7 +320,7 @@ TOKEN_TO_BYTE = {
     "E": 0x10, "E长": 0x11, "Q": 0x12, "Q长": 0x13, "R": 0x14, "R长": 0x15,
     "1变奏": 0x20, "1合轴": 0x21, "2变奏": 0x22, "2合轴": 0x23,
     "3变奏": 0x24, "3合轴": 0x25,
-    "SPACE": 0x30, "RMB": 0x31, "MMB": 0x32,
+    "SPACE": 0x30, "RMB": 0x31, "MMB": 0x32, "SHIFT": 0x33,
 }
 BYTE_TO_TOKEN = {v: k for k, v in TOKEN_TO_BYTE.items()}
 
@@ -718,12 +725,12 @@ class App:
         if kind == "mouse":
             if self._in_ui(pos):
                 return
-            label = val + ("_HOLD" if extra >= self.hold_ms else "")
+            label = val + ("_HOLD" if extra >= self.hold_ms and val not in NO_HOLD_KEYS else "")
         else:
             base = vk_label(val)
             if not base:
                 return
-            label = base + ("_HOLD" if extra >= self.hold_ms else "")
+            label = base + ("_HOLD" if extra >= self.hold_ms and base not in NO_HOLD_KEYS else "")
         if not self.seq:
             return
         if label == self.seq[0][1]:
@@ -865,7 +872,7 @@ def paint_slot_text(c, x0, y0, s, sc, disp, key, label, fg, lf, bad=False, compa
 
 # ---------------- 编辑器 ----------------
 class Editor:
-    KEYS = ["A", "Z", "E", "Q", "R", "1", "2", "3", "SPACE"]
+    KEYS = ["A", "Z", "E", "Q", "R", "1", "2", "3", "SPACE", "SHIFT"]
 
     def __init__(self, app):
         self.app = app
@@ -998,8 +1005,8 @@ class Editor:
         self.sel_key = None
         self.key_btns = {}
         for k in self.KEYS:
-            label = "空格" if k == "SPACE" else k
-            b = tk.Button(keys, text=label, width=(4 if k == "SPACE" else 3), bd=0,
+            label = {"SPACE": "空格", "SHIFT": "闪避"}.get(k, k)
+            b = tk.Button(keys, text=label, width=(4 if k in ("SPACE", "SHIFT") else 3), bd=0,
                           bg=C_BAR, fg=C_TEXT,
                           activebackground="#1f2937", activeforeground="#fff",
                           font=("Microsoft YaHei", int(12 * sc), "bold"),
@@ -1251,6 +1258,8 @@ class Editor:
             return "Z"
         if k == "SPACE":
             return "SPACE"
+        if k == "SHIFT":
+            return "SHIFT"
         if k in ("E", "Q", "R"):
             return k + ("长" if self.mod_var.get() == "长按" else "")
         if k in ("1", "2", "3"):
